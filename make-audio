@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Anchor paths to this script so it works from any current directory.
+repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+config_file="${CASE2AUDIO_CONFIG:-$repo_dir/.case2audio.env}"
+case2audio_bin="$repo_dir/.venv/bin/case2audio"
+
+usage() {
+  cat <<'EOF'
+Usage: ./make-audio [--ocr] [--dry-run] PDF [case2audio make options]
+
+Turn one PDF into narration text and Matthew Generative audio.
+
+  --ocr       Enable OCR for a scanned/image-only PDF.
+  --dry-run   Print the command without extracting or calling AWS.
+  -h, --help  Show this help.
+
+Examples:
+  ./make-audio ~/Downloads/case.pdf
+  ./make-audio --ocr ~/Downloads/scanned-case.pdf
+  ./make-audio ~/Downloads/case.pdf --drop-regex '^confidential$'
+EOF
+}
+
+use_ocr=false
+dry_run=false
+
+# Wrapper-only flags go before the PDF; everything after it goes to case2audio.
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --ocr)
+      use_ocr=true
+      shift
+      ;;
+    --dry-run)
+      dry_run=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [[ $# -lt 1 ]]; then
+  usage >&2
+  exit 2
+fi
+
+pdf="$1"
+shift
+
+if [[ ! -f "$pdf" ]]; then
+  echo "PDF not found: $pdf" >&2
+  exit 2
+fi
+
+# Resolve the PDF before changing directories so relative inputs still work.
+pdf_dir="$(cd -- "$(dirname -- "$pdf")" && pwd -P)"
+pdf="$pdf_dir/$(basename -- "$pdf")"
+
+if [[ ! -f "$config_file" ]]; then
+  echo "Missing local config: $config_file" >&2
+  echo "Run: cp .case2audio.env.example .case2audio.env" >&2
+  exit 2
+fi
+
+# This ignored file holds local AWS values without baking them into Git history.
+set -a
+# shellcheck disable=SC1090
+source "$config_file"
+set +a
+
+bucket="${CASE2AUDIO_BUCKET:-}"
+region="${CASE2AUDIO_REGION:-us-east-1}"
+profile="${CASE2AUDIO_PROFILE:-case2audio}"
+
+if [[ -z "$bucket" || "$bucket" == "YOUR-UNIQUE-CASE2AUDIO-BUCKET" ]]; then
+  echo "Set CASE2AUDIO_BUCKET in $config_file" >&2
+  exit 2
+fi
+
+if [[ ! -x "$case2audio_bin" ]]; then
+  echo "case2audio is not installed in .venv." >&2
+  echo "Run: ./scripts/bootstrap.sh" >&2
+  exit 2
+fi
+
+command=(
+  "$case2audio_bin" make "$pdf"
+  --bucket "$bucket"
+  --region "$region"
+  --profile "$profile"
+)
+
+# Born-digital PDFs are the common case and do not need slow OCR.
+if [[ "$use_ocr" == false ]]; then
+  command+=(--no-ocr)
+fi
+
+# Advanced CLI flags remain available without making the wrapper complicated.
+command+=("$@")
+
+if [[ "$dry_run" == true ]]; then
+  printf 'Would run:'
+  printf ' %q' "${command[@]}"
+  printf '\n'
+  exit 0
+fi
+
+# Keep every generated job under this repository's ignored generated/ folder.
+cd "$repo_dir"
+exec "${command[@]}"

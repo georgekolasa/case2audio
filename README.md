@@ -83,6 +83,32 @@ encryption. Delete generated objects according to your retention needs.
 
 ## One-command PDF to MP3
 
+For the shortest normal workflow, create a machine-local config once:
+
+```bash
+cp .case2audio.env.example .case2audio.env
+```
+
+Set `CASE2AUDIO_BUCKET` in `.case2audio.env`. The local file is ignored by Git so its
+account-specific values do not end up in the public repository. Then run this from any directory;
+activating `.venv` is not required:
+
+```bash
+/path/to/case2audio/make-audio ~/Downloads/your-case.pdf
+```
+
+From the repository itself, that is simply:
+
+```bash
+./make-audio ~/Downloads/your-case.pdf
+```
+
+The wrapper defaults to the `Matthew` Generative voice and skips OCR for normal selectable-text
+PDFs. Use `./make-audio --ocr ~/Downloads/scanned-case.pdf` for an image-only scan. You can safely
+inspect the resolved command first with `./make-audio --dry-run ~/Downloads/your-case.pdf`.
+
+The equivalent full CLI command is:
+
 ```bash
 case2audio make inputs/your-case.pdf \
   --bucket YOUR-UNIQUE-CASE2AUDIO-BUCKET \

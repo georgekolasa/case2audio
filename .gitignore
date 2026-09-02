@@ -1,5 +1,7 @@
 .DS_Store
 .venv/
+# Keep machine/account-specific AWS settings out of the public repository.
+.case2audio.env
 __pycache__/
 *.py[cod]
 .pytest_cache/

@@ -25,8 +25,8 @@ case2audio doctor
 If `doctor` says the AWS token is invalid, refresh the login before synthesis:
 
 ```bash
-aws sts get-caller-identity
-aws sso login --profile YOUR-PROFILE  # Only for an AWS SSO profile.
+aws login --profile case2audio
+aws sts get-caller-identity --profile case2audio
 ```
 
 The first real extraction downloads Docling's local models, so it is much slower than later
@@ -54,12 +54,21 @@ reading order, so inspect the result when a page mixes tables and sidebars.
 
 ## Configure AWS once
 
-The CLI uses the standard AWS credential chain. It never stores keys in this repo.
+The CLI uses the standard AWS credential chain. It never stores keys in this repo. AWS CLI
+2.32 or newer can reuse your regular AWS Console sign-in and manage temporary credentials, so
+you do not need permanent access keys or IAM Identity Center just for this project.
 
 ```bash
-aws configure
-aws s3 mb s3://YOUR-UNIQUE-CASE2AUDIO-BUCKET --region us-east-2
+brew install awscli
+aws login --profile case2audio
+aws s3 mb s3://YOUR-UNIQUE-CASE2AUDIO-BUCKET \
+  --region us-east-2 \
+  --profile case2audio
 ```
+
+If your organization already uses IAM Identity Center, use its existing SSO profile instead.
+For a personal account without Identity Center, `aws login` is the simpler route. Prefer a
+least-privilege IAM identity for regular use rather than running ongoing workloads as root.
 
 The bucket must be in the same region as Polly. A narrowly scoped IAM identity needs these
 actions:

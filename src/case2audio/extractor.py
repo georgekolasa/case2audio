@@ -37,6 +37,7 @@ def extract_pdf(
         raise Case2AudioError(f"Expected a .pdf file: {path}")
 
     # Lazy imports keep `case2audio --help` fast despite Docling's large ML stack.
+    from docling.datamodel.backend_options import ThreadedDoclingParseBackendOptions
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import PdfPipelineOptions
     from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -50,7 +51,12 @@ def extract_pdf(
     converter = DocumentConverter(
         allowed_formats=[InputFormat.PDF],
         format_options={
-            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_options=pipeline_options,
+                # Docling's native parser can segfault when its page workers race on macOS.
+                # One parser thread is slightly slower but makes extraction deterministic.
+                backend_options=ThreadedDoclingParseBackendOptions(parser_threads=1),
+            ),
         },
     )
 

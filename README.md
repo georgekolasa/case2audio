@@ -11,6 +11,61 @@ The workflow is intentionally split in two:
 Source PDFs, extracted text, and audio are ignored by Git so licensed course material does
 not accidentally land on GitHub.
 
+## Architecture
+
+> **Maintenance note:** Keep this section and diagram updated whenever the data flow, local/AWS
+> boundary, output layout, default voice or engine, or AWS requirements change.
+
+```mermaid
+flowchart LR
+    subgraph local[Your machine]
+        PDF[Source PDF]
+        Wrapper[make-audio wrapper]
+        CLI[case2audio make]
+        Docling[Docling extraction and optional OCR]
+        Order[Reading-order repair]
+        Clean[Narration cleanup]
+        Text[narration.txt]
+        Split[Polly-sized text chunks]
+        Download[Poll and download]
+        MP3[Local MP3 parts]
+
+        PDF --> Wrapper --> CLI --> Docling --> Order --> Clean --> Text --> Split
+        Download --> MP3
+    end
+
+    subgraph aws[AWS in the configured region]
+        Validate[Validate voice and engine]
+        Polly[Amazon Polly async synthesis]
+        S3[(Private S3 bucket)]
+
+        Validate --> Polly --> S3
+    end
+
+    Split --> Validate
+    S3 --> Download
+```
+
+The responsibilities are deliberately separated:
+
+- `make-audio` loads the ignored local AWS configuration and invokes the installed CLI. It skips
+  OCR by default because most source PDFs already contain selectable text.
+- `case2audio extract` runs entirely on the local machine. Docling reads the PDF, the reading-order
+  layer moves detected sidebars out of the main narrative, and the cleanup layer removes page
+  furniture, license text, duplicate headings, and other material that sounds bad when narrated.
+- The cleaned result and extraction diagnostics are written under `generated/<pdf-name>/` before
+  any paid synthesis request is made.
+- `case2audio speak` splits reviewed narration at safe paragraph or sentence boundaries, validates
+  the selected voice/engine in the configured region, and starts asynchronous Polly tasks.
+- Polly writes each completed MP3 to the private S3 bucket. The CLI polls the tasks and downloads
+  the files into `generated/<pdf-name>/audio/`.
+- `case2audio make` is the orchestrator: it runs the local `extract` stage and AWS-backed `speak`
+  stage in sequence. `case2audio doctor` only checks local dependencies and AWS access.
+
+Only cleaned narration text crosses the AWS boundary; the source PDF and Docling debug files stay
+local. S3 objects remain in the private bucket until the account's own cleanup or retention policy
+removes them.
+
 ## Fast setup
 
 Python 3.12 is recommended. On macOS with Homebrew:

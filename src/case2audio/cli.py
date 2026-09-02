@@ -68,9 +68,11 @@ def _add_polly_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--region", help="AWS region; otherwise use the normal AWS config.")
     parser.add_argument("--profile", help="Named AWS profile; otherwise use the default chain.")
     parser.add_argument("--prefix", default="case2audio", help="Temporary S3 key prefix.")
-    parser.add_argument("--voice", default="Joanna")
+    parser.add_argument("--voice", default="Matthew")
     parser.add_argument(
-        "--engine", choices=("standard", "neural", "long-form", "generative"), default="standard"
+        "--engine",
+        choices=("standard", "neural", "long-form", "generative"),
+        default="generative",
     )
     parser.add_argument("-o", "--output-dir", type=Path, default=Path("generated"))
 

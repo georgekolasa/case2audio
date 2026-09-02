@@ -44,6 +44,10 @@ class FakePolly:
         self.start_calls.append(kwargs)
         return {"SynthesisTask": {"TaskId": "task-123"}}
 
+    def describe_voices(self, **kwargs):
+        assert kwargs == {"Engine": "generative"}
+        return {"Voices": [{"Id": "Matthew"}]}
+
     def get_speech_synthesis_task(self, **kwargs):
         assert kwargs == {"TaskId": "task-123"}
         return {
@@ -87,3 +91,22 @@ def test_synthesis_submits_waits_and_downloads(tmp_path: Path) -> None:
     assert parts[0].path.read_bytes() == b"fake mp3"
     assert session.polly.start_calls[0]["Text"] == "A short case."
     assert session.s3.download_calls[0][1] == "job/task-123.mp3"
+
+
+def test_synthesis_rejects_unsupported_voice_before_starting_task(tmp_path: Path) -> None:
+    session = FakeSession()
+    session.polly.describe_voices = lambda **kwargs: {"Voices": []}
+
+    try:
+        synthesize_to_directory(
+            "A short case.",
+            tmp_path,
+            PollyOptions(bucket="example", region="us-east-2"),
+            session=session,
+        )
+    except Exception as exc:
+        assert "Matthew + generative is available in us-east-1" in str(exc)
+    else:
+        raise AssertionError("Expected unsupported voice settings to fail")
+
+    assert session.polly.start_calls == []

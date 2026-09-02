@@ -62,7 +62,7 @@ you do not need permanent access keys or IAM Identity Center just for this proje
 brew install awscli
 aws login --profile case2audio
 aws s3 mb s3://YOUR-UNIQUE-CASE2AUDIO-BUCKET \
-  --region us-east-2 \
+  --region us-east-1 \
   --profile case2audio
 ```
 
@@ -86,7 +86,7 @@ encryption. Delete generated objects according to your retention needs.
 ```bash
 case2audio make inputs/your-case.pdf \
   --bucket YOUR-UNIQUE-CASE2AUDIO-BUCKET \
-  --region us-east-2
+  --region us-east-1
 ```
 
 Results appear under `generated/your-case/`:
@@ -119,9 +119,10 @@ case2audio make inputs/case.pdf --no-ocr --bucket YOUR-BUCKET
 # Use another voice and AWS profile.
 case2audio make inputs/case.pdf \
   --voice Matthew \
-  --engine standard \
+  --engine generative \
   --profile school \
-  --bucket YOUR-BUCKET
+  --bucket YOUR-BUCKET \
+  --region us-east-1
 
 # Re-synthesize previously reviewed text without extracting again.
 case2audio speak generated/case.txt --bucket YOUR-BUCKET
@@ -131,8 +132,12 @@ Voice support varies by engine and region. If Polly rejects a voice/engine combi
 valid choices with:
 
 ```bash
-aws polly describe-voices --engine neural --region us-east-2
+aws polly describe-voices --engine generative --region us-east-1
 ```
+
+The defaults are `Matthew` + `generative`, which AWS currently offers in `us-east-1` but not
+`us-east-2`. Use a bucket in `us-east-1`, or explicitly pass `--engine standard` when staying
+in `us-east-2`.
 
 ## Development
 

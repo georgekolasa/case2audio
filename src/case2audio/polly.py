@@ -23,8 +23,8 @@ class PollyOptions:
     region: str | None = None
     profile: str | None = None
     prefix: str = "case2audio"
-    voice: str = "Joanna"
-    engine: str = "standard"
+    voice: str = "Matthew"
+    engine: str = "generative"
     output_format: str = "mp3"
     poll_seconds: float = 5.0
     timeout_seconds: float = 900.0
@@ -137,6 +137,7 @@ def synthesize_to_directory(
 
     polly = session.client("polly")
     s3 = session.client("s3")
+    _validate_voice_engine(polly, options)
     chunks = split_for_polly(text)
     output_dir.mkdir(parents=True, exist_ok=True)
     parts: list[AudioPart] = []
@@ -175,6 +176,24 @@ def synthesize_to_directory(
         parts.append(AudioPart(task_id=task_id, output_uri=output_uri, path=part_path))
 
     return parts
+
+
+def _validate_voice_engine(polly: Any, options: PollyOptions) -> None:
+    """Fail before billing when a voice/engine pair is unavailable in the selected region."""
+
+    try:
+        voices = polly.describe_voices(Engine=options.engine).get("Voices", [])
+    except Exception as exc:
+        raise Case2AudioError(f"Could not validate Polly voice settings: {exc}") from exc
+
+    if any(voice.get("Id") == options.voice for voice in voices):
+        return
+
+    region = options.region or "the configured AWS region"
+    raise Case2AudioError(
+        f"Polly voice {options.voice!r} does not support engine {options.engine!r} "
+        f"in {region}. Matthew + generative is available in us-east-1."
+    )
 
 
 def _wait_for_task(

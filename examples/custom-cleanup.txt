@@ -1,0 +1,4 @@
+# Pass these one at a time with --drop-regex, after inspecting debug/docling.md.
+# Keep patterns narrow because accidental deletion is harder to notice in audio.
+^confidential course copy$
+^downloaded by .+ on \d{4}-\d{2}-\d{2}$

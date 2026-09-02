@@ -1,0 +1,17 @@
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Licensed source documents and generated audio should never be committed by accident.
+inputs/
+generated/
+*.pdf
+*.mp3
+*.ogg
+*.wav

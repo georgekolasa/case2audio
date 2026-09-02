@@ -70,7 +70,7 @@ def _add_polly_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--prefix", default="case2audio", help="Temporary S3 key prefix.")
     parser.add_argument("--voice", default="Joanna")
     parser.add_argument(
-        "--engine", choices=("standard", "neural", "long-form", "generative"), default="neural"
+        "--engine", choices=("standard", "neural", "long-form", "generative"), default="standard"
     )
     parser.add_argument("-o", "--output-dir", type=Path, default=Path("generated"))
 

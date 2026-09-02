@@ -11,6 +11,7 @@ fi
 # Keeping everything in .venv makes setup repeatable and cleanup painless.
 "$python_bin" -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -e '.[dev]'
+# A regular install avoids Python builds that intentionally skip hidden editable .pth files.
+.venv/bin/python -m pip install '.[dev]'
 
 echo "Setup complete. Run: source .venv/bin/activate"

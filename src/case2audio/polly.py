@@ -24,7 +24,7 @@ class PollyOptions:
     profile: str | None = None
     prefix: str = "case2audio"
     voice: str = "Joanna"
-    engine: str = "neural"
+    engine: str = "standard"
     output_format: str = "mp3"
     poll_seconds: float = 5.0
     timeout_seconds: float = 900.0

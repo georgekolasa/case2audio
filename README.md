@@ -119,7 +119,7 @@ case2audio make inputs/case.pdf --no-ocr --bucket YOUR-BUCKET
 # Use another voice and AWS profile.
 case2audio make inputs/case.pdf \
   --voice Matthew \
-  --engine neural \
+  --engine standard \
   --profile school \
   --bucket YOUR-BUCKET
 
@@ -141,6 +141,9 @@ source .venv/bin/activate
 pytest
 ruff check .
 ```
+
+After changing package code locally, rerun `python -m pip install --no-deps .` before testing the
+installed `case2audio` command.
 
 CI runs the fast unit tests and lint checks without downloading Docling models or calling AWS.
 The AWS test uses fakes, so pull requests cannot create paid synthesis tasks.

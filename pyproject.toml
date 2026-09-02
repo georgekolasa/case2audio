@@ -13,7 +13,8 @@ authors = [{ name = "George Kolasa" }]
 dependencies = [
   # Pin Docling's minor line so a model/API change cannot silently break extraction.
   "docling>=2.124,<2.125",
-  "boto3>=1.43,<2",
+  # AWS console-login profiles require the Common Runtime credential provider.
+  "boto3[crt]>=1.43,<2",
 ]
 
 [project.optional-dependencies]

@@ -77,7 +77,7 @@ class FakeSession:
         return self.polly if name == "polly" else self.s3
 
 
-def test_synthesis_submits_waits_and_downloads(tmp_path: Path) -> None:
+def test_synthesis_submits_waits_and_downloads(tmp_path: Path, capsys) -> None:
     session = FakeSession()
 
     parts = synthesize_to_directory(
@@ -91,6 +91,11 @@ def test_synthesis_submits_waits_and_downloads(tmp_path: Path) -> None:
     assert parts[0].path.read_bytes() == b"fake mp3"
     assert session.polly.start_calls[0]["Text"] == "A short case."
     assert session.s3.download_calls[0][1] == "job/task-123.mp3"
+    progress = capsys.readouterr().out
+    assert "Connecting to Amazon Polly (Matthew, generative)" in progress
+    assert "Submitting 1 audio part to Polly" in progress
+    assert "Polly is processing part 1/1 (task task-123)" in progress
+    assert "Polly finished part 1/1; downloading audio" in progress
 
 
 def test_synthesis_rejects_unsupported_voice_before_starting_task(tmp_path: Path) -> None:

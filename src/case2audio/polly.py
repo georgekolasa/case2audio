@@ -135,10 +135,16 @@ def synthesize_to_directory(
 
         session = boto3.Session(profile_name=options.profile, region_name=options.region)
 
+    # AWS can be quiet for minutes, so confirm immediately that the CLI has moved on to Polly.
+    _print_progress(f"Connecting to Amazon Polly ({options.voice}, {options.engine})...")
     polly = session.client("polly")
     s3 = session.client("s3")
     _validate_voice_engine(polly, options)
     chunks = split_for_polly(text)
+    part_word = "part" if len(chunks) == 1 else "parts"
+    _print_progress(
+        f"Submitting {len(chunks)} audio {part_word} to Polly; this can take several minutes."
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     parts: list[AudioPart] = []
 
@@ -158,6 +164,9 @@ def synthesize_to_directory(
             raise Case2AudioError(f"Polly rejected part {index}: {exc}") from exc
 
         task_id = response["SynthesisTask"]["TaskId"]
+        _print_progress(
+            f"Polly is processing part {index}/{len(chunks)} (task {task_id})."
+        )
         task = _wait_for_task(
             polly,
             task_id,
@@ -168,6 +177,7 @@ def synthesize_to_directory(
         extension = "mp3" if options.output_format == "mp3" else options.output_format
         part_path = output_dir / f"part-{index:03d}.{extension}"
         key = s3_key_from_output_uri(output_uri, options.bucket)
+        _print_progress(f"Polly finished part {index}/{len(chunks)}; downloading audio...")
         try:
             s3.download_file(options.bucket, key, str(part_path))
         except Exception as exc:
@@ -176,6 +186,12 @@ def synthesize_to_directory(
         parts.append(AudioPart(task_id=task_id, output_uri=output_uri, path=part_path))
 
     return parts
+
+
+def _print_progress(message: str) -> None:
+    """Flush progress immediately so buffered terminals never look frozen."""
+
+    print(message, flush=True)
 
 
 def _validate_voice_engine(polly: Any, options: PollyOptions) -> None:

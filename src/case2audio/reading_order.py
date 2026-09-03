@@ -34,6 +34,7 @@ def order_for_narration(blocks: list[TextBlock]) -> tuple[list[TextBlock], list[
     pages = sorted({block.page for block in blocks})
     for page in pages:
         page_blocks = [block for block in blocks if block.page == page]
+        page_blocks = _repair_page_order(page_blocks)
         page_main, page_sidebars = _split_page(page_blocks)
         main.extend(page_main)
         sidebars.extend(page_sidebars)
@@ -76,12 +77,66 @@ def _split_page(blocks: list[TextBlock]) -> tuple[list[TextBlock], list[list[Tex
             sidebar.append(candidate)
             index += 1
 
+        if len(sidebar) == 1:
+            # A heading without same-column content is a normal narrow section label.
+            main.append(block)
+            continue
+
         _recover_embedded_column_continuation(main, sidebar)
         sidebars.append(sidebar)
 
     # Items after a sidebar normally belong to the other main-text column.
     main.extend(blocks[index:])
     return main, sidebars
+
+
+def _repair_page_order(blocks: list[TextBlock]) -> list[TextBlock]:
+    """Repair late headings and insert synthetic notes by their page geometry."""
+
+    notes = [block for block in blocks if block.label == "note"]
+    ordered = [block for block in blocks if block.label != "note"]
+
+    # Docling occasionally discovers a page-top heading after all of that page's body text.
+    for header in sorted(
+        (block for block in ordered if block.label == "section_header"),
+        key=lambda block: block.top,
+        reverse=True,
+    ):
+        current = ordered.index(header)
+        target = next(
+            (
+                index
+                for index, candidate in enumerate(ordered)
+                if candidate is not header
+                and candidate.top < header.bottom
+                and (
+                    _horizontal_overlap(header, candidate) >= 0.25
+                    # Centered page titles can sit above left-aligned body blocks.
+                    or header.top > header.page_height * 0.80
+                )
+            ),
+            len(ordered),
+        )
+        if target < current:
+            ordered.pop(current)
+            ordered.insert(target, header)
+
+    # Tables and visual notices are not in document.texts, so place them explicitly.
+    for note in sorted(notes, key=lambda block: block.top, reverse=True):
+        target = next(
+            (index for index, candidate in enumerate(ordered) if candidate.top < note.top),
+            len(ordered),
+        )
+        ordered.insert(target, note)
+    return ordered
+
+
+def _horizontal_overlap(first: TextBlock, second: TextBlock) -> float:
+    """Measure overlap against the narrower block so full-width prose matches headings."""
+
+    overlap = max(0.0, min(first.right, second.right) - max(first.left, second.left))
+    narrower = max(min(first.right - first.left, second.right - second.left), 1.0)
+    return overlap / narrower
 
 
 def _looks_like_sidebar_header(block: TextBlock) -> bool:

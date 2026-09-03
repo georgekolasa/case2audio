@@ -77,3 +77,46 @@ def test_contact_email_is_removed_without_joining_the_next_section() -> None:
     result = clean_markdown(markdown)
 
     assert result == "The author teaches negotiation.\n\nSidebars\n"
+
+
+def test_cleaner_removes_misclassified_footer_and_repeated_byline() -> None:
+    markdown = """# TechPulse Labs Case
+
+BY MODUPE AKINOLA AND ADAM GALINSKY
+
+This opening paragraph is deliberately longer than one hundred and eighty characters so the
+cleaner knows the cover introduction has ended and later repeated furniture is not real prose.
+
+# Page 9 | TechPulse Labs Case
+
+BY MODUPE AKINOLA AND ADAM GALINSKY
+
+Useful exhibit prose.
+"""
+
+    result = clean_markdown(markdown)
+
+    assert "Page 9" not in result
+    assert result.count("BY MODUPE") == 1
+    assert result.endswith("Useful exhibit prose.\n")
+
+
+def test_cleaner_repairs_high_confidence_pdf_word_damage() -> None:
+    markdown = """After becoming roduct lead, she inherited a marketdriven plan.
+
+The end-ofyear review arrived after several deadlines-name a setback.
+
+An up-and-comer considered the underlying-and often benevolent-intentions.
+
+- -Have you made progress?
+"""
+
+    result = clean_markdown(markdown)
+
+    assert "product lead" in result
+    assert "market-driven" in result
+    assert "end-of-year" in result
+    assert "deadlines - name" in result
+    assert "up-and-comer" in result
+    assert "underlying - and often benevolent-intentions" in result
+    assert "\n\nHave you made progress?" in result

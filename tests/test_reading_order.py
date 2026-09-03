@@ -56,3 +56,52 @@ def test_cross_page_continuation_skips_running_continued_header() -> None:
     main, _ = order_for_narration(blocks)
 
     assert [item.text for item in main] == ["This idea is the same as feeling sympathy."]
+
+
+def test_narrow_heading_without_sidebar_content_stays_in_main_flow() -> None:
+    blocks = [
+        block("TECHPULSE'S EMPLOYEES", label="section_header", top=610, bottom=590, right=220),
+        block("The employee discussion continues here.", top=570, bottom=520, right=535),
+    ]
+
+    main, sidebars = order_for_narration(blocks)
+    rendered = render_markdown(main, sidebars)
+
+    assert sidebars == []
+    assert rendered.index("TECHPULSE'S EMPLOYEES") < rendered.index("employee discussion")
+    assert "Sidebars" not in rendered
+
+
+def test_page_top_heading_discovered_late_moves_before_its_content() -> None:
+    blocks = [
+        block("Talking points", label="section_header", top=650, bottom=630, right=150),
+        block("First note.", top=610, bottom=590, right=500),
+        block(
+            "Attachment 2",
+            label="section_header",
+            top=720,
+            bottom=690,
+            left=200,
+            right=450,
+        ),
+    ]
+
+    main, _ = order_for_narration(blocks)
+
+    assert [item.text for item in main] == ["Attachment 2", "Talking points", "First note."]
+
+
+def test_synthetic_exhibit_note_is_inserted_by_geometry() -> None:
+    blocks = [
+        block("Exhibit B", label="section_header", top=720, bottom=690, right=500),
+        block("Footnote after the table.", top=180, bottom=160, right=500),
+        block("Data table omitted.", label="note", top=650, bottom=220, right=500),
+    ]
+
+    main, _ = order_for_narration(blocks)
+
+    assert [item.text for item in main] == [
+        "Exhibit B",
+        "Data table omitted.",
+        "Footnote after the table.",
+    ]

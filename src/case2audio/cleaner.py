@@ -23,10 +23,11 @@ _IMAGE_RE = re.compile(r"!\[[^]]*]\([^)]*\)")
 _LINK_RE = re.compile(r"\[([^]]+)]\([^)]*\)")
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+")
-_LIST_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)")
+_LIST_RE = re.compile(r"^\s*(?:(?:[-*+]\s*)+|\d+[.)]\s+)")
 _TABLE_DIVIDER_RE = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$")
 _TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
 _PAGE_NUMBER_RE = re.compile(r"^\s*(?:page\s+)?\d{1,3}\s*$", re.IGNORECASE)
+_RUNNING_FOOTER_RE = re.compile(r"^page\s+\d+\s*\|\s*.+$", re.IGNORECASE)
 # A private-use marker survives whitespace cleanup and preserves deliberate spoken breaks.
 _HARD_BREAK = "\ue000"
 
@@ -35,7 +36,7 @@ _HARD_BREAK = "\ue000"
 class CleanerOptions:
     """Narration policy kept separate from PDF extraction."""
 
-    table_mode: str = "skip"
+    table_mode: str = "smart"
     extra_drop_patterns: tuple[str, ...] = ()
 
 
@@ -43,8 +44,8 @@ def clean_markdown(markdown: str, options: CleanerOptions | None = None) -> str:
     """Return plain narration text from Docling-flavored Markdown."""
 
     options = options or CleanerOptions()
-    if options.table_mode not in {"skip", "linearize"}:
-        raise ValueError("table_mode must be 'skip' or 'linearize'")
+    if options.table_mode not in {"smart", "skip", "linearize"}:
+        raise ValueError("table_mode must be 'smart', 'skip', or 'linearize'")
 
     # Decode entities before stripping tags so things like ampersands remain speakable.
     text = html.unescape(markdown.replace("\r\n", "\n").replace("\r", "\n"))
@@ -74,13 +75,16 @@ def clean_markdown(markdown: str, options: CleanerOptions | None = None) -> str:
             continue
         if _PAGE_NUMBER_RE.fullmatch(line):
             continue
+        # Docling can mislabel a combined running footer as a real section heading.
+        if _RUNNING_FOOTER_RE.fullmatch(_HEADING_RE.sub("", line)):
+            continue
         if any(pattern.search(line) for pattern in drop_patterns):
             continue
 
         if _TABLE_DIVIDER_RE.fullmatch(line):
             continue
         if _TABLE_ROW_RE.fullmatch(line):
-            if options.table_mode == "skip":
+            if options.table_mode in {"smart", "skip"}:
                 continue
             # Pipes sound terrible; short pauses preserve the row's meaning.
             line = "; ".join(cell.strip() for cell in line.strip("|").split("|") if cell.strip())
@@ -90,11 +94,11 @@ def clean_markdown(markdown: str, options: CleanerOptions | None = None) -> str:
         line = _LIST_RE.sub("", line)
         line = _strip_markdown_emphasis(line)
 
-        # Cover pages often repeat the article title and byline on page one of the body.
+        # Cover pages and later footers often repeat the article title and byline.
+        normalized = re.sub(r"\s+", " ", line).casefold()
+        if normalized in intro_lines:
+            continue
         if in_intro:
-            normalized = re.sub(r"\s+", " ", line).casefold()
-            if normalized in intro_lines:
-                continue
             intro_lines.add(normalized)
             if len(line) > 180:
                 in_intro = False
@@ -109,6 +113,35 @@ def clean_markdown(markdown: str, options: CleanerOptions | None = None) -> str:
     # Restore deliberate table row breaks after ordinary prose lines have been joined.
     text = re.sub(rf"{_HARD_BREAK}\s*", "\n", text)
     text = re.sub(r"[ \t]+", " ", text)
+    # Repair a few high-confidence PDF joins without applying risky general spellcheck.
+    text = re.sub(r"\broduct\b", "product", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"\b(market|data|customer|technology|performance|mission|purpose|value)driven\b",
+        r"\1-driven",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\bend-of(?=(?:year|life|course|day)\b)",
+        "end-of-",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # These words after a lost em dash are discourse, not compound-word suffixes.
+    # Leave forms such as "up-and-comers" alone: the second hyphen proves it is a compound.
+    text = re.sub(
+        r"(?<=\w)-(?=(?:and|but|or|name|straight|was|were)\b(?!-))",
+        " - ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # A lower-case plural followed by a capitalized name usually marks a lost em dash.
+    text = re.sub(r"(?<=s)-(?=[A-Z])", " - ", text)
+    text = re.sub(r"\bman power\b", "manpower", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+:\s*", ": ", text)
+    text = re.sub(r"(?m)^Exhibits\s+(?=Exhibit\b)", "Exhibits.\n\n", text)
+    # A standalone emphasis marker before a parenthetical should not be spoken as punctuation.
+    text = text.replace("*(", "(")
     # Drop caps sometimes arrive as "W HEN"; joining only one letter is deliberately narrow.
     text = re.sub(r"(?m)^([A-Z])\s+([A-Z]{2,})\b", r"\1\2", text)
     # Older PDFs can lose a dash at an italic boundary around this common phrase.

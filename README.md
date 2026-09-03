@@ -22,15 +22,19 @@ flowchart LR
         PDF[Source PDF]
         Wrapper[make-audio wrapper]
         CLI[case2audio make]
+        Safety[Visual-redaction safety scan]
         Docling[Docling extraction and optional OCR]
         Order[Reading-order repair]
+        Exhibits[Smart table and figure handling]
         Clean[Narration cleanup]
         Text[narration.txt]
+        Quality[Pre-Polly quality gate]
         Split[Polly-sized text chunks]
         Download[Poll and download]
         MP3[Local MP3 parts]
 
-        PDF --> Wrapper --> CLI --> Docling --> Order --> Clean --> Text --> Split
+        PDF --> Wrapper --> CLI --> Safety --> Docling --> Order --> Exhibits --> Clean --> Text
+        Text --> Quality --> Split
         Download --> MP3
     end
 
@@ -51,10 +55,15 @@ The responsibilities are deliberately separated:
 - `make-audio` loads the ignored local AWS configuration and invokes the installed CLI. It skips
   OCR by default because most source PDFs already contain selectable text.
 - `case2audio extract` runs entirely on the local machine. Docling reads the PDF, the reading-order
-  layer moves detected sidebars out of the main narrative, and the cleanup layer removes page
-  furniture, license text, duplicate headings, and other material that sounds bad when narrated.
+  layer repairs misplaced headings and moves real sidebars out of the main narrative, and the
+  cleanup layer removes page furniture, duplicate headings, and other material that sounds bad
+  when narrated.
+- Before extraction, a local PDF safety scan replaces selectable text hidden under opaque black
+  rectangles with `[redacted]` in the narration and every debug artifact.
+- Smart exhibit handling narrates compact text tables, clearly marks dense numeric tables and
+  substantial figures for visual review, and never silently drops them.
 - The cleaned result and extraction diagnostics are written under `generated/<pdf-name>/` before
-  any paid synthesis request is made.
+  any paid synthesis request is made. The quality report blocks known redaction or footer leaks.
 - `case2audio speak` splits reviewed narration at safe paragraph or sentence boundaries, validates
   the selected voice/engine in the configured region, and starts asynchronous Polly tasks.
 - Polly writes each completed MP3 to the private S3 bucket. The CLI polls the tasks and downloads
@@ -103,9 +112,11 @@ case2audio extract inputs/your-case.pdf \
   --drop-regex '^confidential course copy$'
 ```
 
-Tables are skipped by default because raw rows usually sound awful. Use
-`--table-mode linearize` when their content matters. That mode uses Docling's ordinary visual
-reading order, so inspect the result when a page mixes tables and sidebars.
+The default `--table-mode smart` reads compact text-heavy tables but replaces dense numeric tables
+with a clear spoken notice to review the PDF. Large figures get the same treatment. Use
+`--table-mode skip` to omit every table's cells while retaining notices, or `--table-mode linearize`
+to read every table row. The debug `quality-report.txt` records redactions, narrated tables, and
+intentional visual-review notices before anything is sent to Polly.
 
 ## Configure AWS once
 
@@ -178,7 +189,8 @@ generated/your-case/
 ├── debug/
 │   ├── docling.md
 │   ├── narration-order.md
-│   └── docling.json
+│   ├── docling.json
+│   └── quality-report.txt
 └── audio/
     └── part-001.mp3
 ```
@@ -190,12 +202,20 @@ obvious next feature if you start hitting the limit often.
 
 Sidebars detected from their heading and page geometry are moved to a final `Sidebars` section.
 This keeps a box in the left column from interrupting an unfinished sentence in the main article.
+Narrow headings without sidebar content stay where they appear in the document.
+
+The pre-Polly quality gate stops synthesis if hidden redacted text or a known running-footer form
+survives cleanup. Warnings about numeric tables and figures are non-blocking because the narration
+contains explicit review notices instead of silently losing that material.
 
 Useful options:
 
 ```bash
 # Born-digital PDF: skip OCR for a faster run.
 case2audio make inputs/case.pdf --no-ocr --bucket YOUR-BUCKET
+
+# Read every table cell instead of using the smart default.
+case2audio make inputs/case.pdf --table-mode linearize --bucket YOUR-BUCKET
 
 # Use another voice and AWS profile.
 case2audio make inputs/case.pdf \

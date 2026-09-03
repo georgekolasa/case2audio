@@ -27,9 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
     extract.add_argument("--no-ocr", action="store_true", help="Skip OCR for born-digital PDFs.")
     extract.add_argument(
         "--table-mode",
-        choices=("skip", "linearize"),
-        default="skip",
-        help="Skip tables for smoother audio, or read cells row by row.",
+        choices=("smart", "skip", "linearize"),
+        default="smart",
+        help="Narrate text tables and mark dense data tables, skip all, or read every cell.",
     )
     extract.add_argument(
         "--drop-regex",
@@ -48,7 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_pdf_argument(make)
     _add_polly_arguments(make)
     make.add_argument("--no-ocr", action="store_true", help="Skip OCR for born-digital PDFs.")
-    make.add_argument("--table-mode", choices=("skip", "linearize"), default="skip")
+    make.add_argument(
+        "--table-mode",
+        choices=("smart", "skip", "linearize"),
+        default="smart",
+    )
     make.add_argument("--drop-regex", action="append", default=[])
     make.set_defaults(handler=_handle_make)
 
@@ -89,15 +93,20 @@ def _handle_extract(args: argparse.Namespace) -> int:
     )
     write_extraction(result, output, debug_dir=args.debug_dir)
     print(f"Saved narration: {output.resolve()} ({len(result.narration):,} characters)")
+    _print_quality(result.quality_report)
     return 0
 
 
 def _handle_speak(args: argparse.Namespace) -> int:
     from .polly import synthesize_to_directory
+    from .quality import ExtractionSignals, assess_narration
 
     if not args.text.is_file():
         raise Case2AudioError(f"Text file not found: {args.text}")
     text = args.text.read_text(encoding="utf-8")
+    quality_report = assess_narration(text, signals=ExtractionSignals())
+    _print_quality(quality_report)
+    _enforce_quality(quality_report)
     parts = synthesize_to_directory(text, args.output_dir, _polly_options(args))
     _print_parts(parts)
     return 0
@@ -117,6 +126,9 @@ def _handle_make(args: argparse.Namespace) -> int:
     narration_path = job_dir / "narration.txt"
     write_extraction(result, narration_path, debug_dir=job_dir / "debug")
     print(f"Saved narration: {narration_path.resolve()} ({len(result.narration):,} characters)")
+    _print_quality(result.quality_report)
+    # Save all local diagnostics first, but never submit unsafe text to a paid service.
+    _enforce_quality(result.quality_report)
     parts = synthesize_to_directory(result.narration, job_dir / "audio", _polly_options(args))
     _print_parts(parts)
     return 0
@@ -142,6 +154,18 @@ def _print_parts(parts) -> None:
     if len(parts) > 1:
         # Avoid silently producing a corrupt joined MP3 when ffmpeg is unavailable.
         print("The document exceeded Polly's task limit, so audio remains in ordered parts.")
+
+
+def _print_quality(report) -> None:
+    print(report.render().rstrip())
+
+
+def _enforce_quality(report) -> None:
+    if report.blocking:
+        codes = ", ".join(finding.code for finding in report.blocking)
+        raise Case2AudioError(
+            f"Narration failed the pre-Polly quality gate ({codes}); no synthesis task submitted."
+        )
 
 
 def _handle_doctor(args: argparse.Namespace) -> int:

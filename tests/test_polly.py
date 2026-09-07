@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from case2audio.polly import (
@@ -85,6 +86,7 @@ def test_synthesis_submits_waits_and_downloads(tmp_path: Path, capsys) -> None:
         tmp_path,
         PollyOptions(bucket="example", poll_seconds=0, timeout_seconds=1),
         session=session,
+        label="bb.pdf",
     )
 
     assert len(parts) == 1
@@ -96,6 +98,10 @@ def test_synthesis_submits_waits_and_downloads(tmp_path: Path, capsys) -> None:
     assert "Submitting 1 audio part to Polly" in progress
     assert "Polly is processing part 1/1 (task task-123)" in progress
     assert "Polly finished part 1/1; downloading audio" in progress
+    assert re.search(
+        r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [^\]]+\] \[bb.pdf\] Polly is processing",
+        progress,
+    )
 
 
 def test_synthesis_rejects_unsupported_voice_before_starting_task(tmp_path: Path) -> None:

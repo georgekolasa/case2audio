@@ -6,7 +6,36 @@ Amazon Polly and download the MP3.
 ## Run it
 
 ```bash
-./make-audio ~/Downloads/bb.pdf
+./make-audio bb.pdf
+```
+
+Or process several PDFs with one command:
+
+```bash
+./make-audio bb.pdf sfn.pdf
+```
+
+Bare filenames default to `~/Downloads`, so this reads `~/Downloads/bb.pdf` and
+`~/Downloads/sfn.pdf`. Explicit paths still work: `./bb.pdf` uses the current directory,
+and `~/Documents/bb.pdf` or an absolute path uses that location. You can mix filenames and
+explicit paths in one command. Quote filenames containing spaces, e.g. `"my case.pdf"`.
+
+PDF extraction runs one at a time, but **up to two PDFs process through Polly concurrently**.
+While Polly generates `bb.pdf`, the command extracts `sfn.pdf` and starts its audio job.
+Results stay separate in `generated/bb/` and `generated/sfn/`. Use `--jobs 1` after the PDFs
+for sequential processing, or `--jobs N` to change the concurrency limit.
+
+Login is checked once before the batch. List all PDFs before shared options, such as
+`--table-mode linearize`. All paths are checked up front; duplicate output names are rejected.
+When a failure is detected, new jobs stop; already running jobs finish and download their outputs.
+The command reports the failures and exits nonzero. Rerun only unfinished PDFs to avoid paying
+for completed audio again.
+
+Polly messages include local timestamps and PDF names, for example:
+
+```text
+[2026-09-07 16:15:03 EDT] [bb.pdf] Polly is processing part 1/1 (task ...).
+[2026-09-07 16:15:25 EDT] [sfn.pdf] Polly is processing part 1/1 (task ...).
 ```
 
 That's the normal command. No virtualenv activation or AWS flags needed. Defaults: Matthew,
@@ -22,9 +51,9 @@ The MP3 lands at `generated/bb/audio/part-001.mp3`; the reviewed text is
 `generated/bb/narration.txt`. Documents over 95,000 characters produce ordered audio parts.
 
 ```bash
-./make-audio --ocr ~/Downloads/scanned-case.pdf    # Scanned/image-only PDF
-./make-audio ~/Downloads/bb.pdf --table-mode linearize
-./make-audio --dry-run ~/Downloads/bb.pdf         # Show options without running
+./make-audio --ocr scanned-case.pdf    # Scanned/image-only PDF
+./make-audio bb.pdf --table-mode linearize
+./make-audio --dry-run bb.pdf sfn.pdf   # Show resolved paths/options without running
 ```
 
 If you need to refresh the login manually:
@@ -109,7 +138,12 @@ flowchart LR
 The responsibilities are deliberately separated:
 
 - `make-audio` loads the ignored local AWS configuration and invokes the installed CLI. It skips
-  OCR by default because most source PDFs already contain selectable text.
+  OCR by default because most source PDFs already contain selectable text. Multiple input paths
+  form a batch: one session check, then the per-PDF flow below with separate outputs.
+  Bare filenames resolve from `~/Downloads`; explicit paths keep their supplied location.
+- Docling extraction and quality checks run sequentially on the main thread because of the native
+  parser's threading constraints. A bounded worker pool overlaps Polly submission, polling, and
+  downloads for up to `--jobs` PDFs (default 2). Each worker creates its own SDK session.
 - `case2audio extract` runs entirely on the local machine. Docling reads the PDF, the reading-order
   layer repairs misplaced headings and moves real sidebars out of the main narrative, and the
   cleanup layer removes page furniture, duplicate headings, and other material that sounds bad

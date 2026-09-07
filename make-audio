@@ -8,25 +8,29 @@ case2audio_bin="$repo_dir/.venv/bin/case2audio"
 
 usage() {
   cat <<'EOF'
-Usage: ./make-audio [--ocr] [--dry-run] PDF [case2audio make options]
+Usage: ./make-audio [--ocr] [--dry-run] PDF [PDF ...] [case2audio make options]
 
-Turn one PDF into narration text and Matthew Generative audio.
+Turn one or more PDFs into separate narration text and Matthew Generative audio.
+List all PDFs before shared case2audio options. Up to two PDFs run through Polly at once.
+Use --jobs 1 after the PDFs for sequential processing.
+Bare filenames are read from ~/Downloads. Use ./file.pdf for the current directory.
 
   --ocr       Enable OCR for a scanned/image-only PDF.
   --dry-run   Print the command without extracting or calling AWS.
   -h, --help  Show this help.
 
 Examples:
-  ./make-audio ~/Downloads/case.pdf
-  ./make-audio --ocr ~/Downloads/scanned-case.pdf
-  ./make-audio ~/Downloads/case.pdf --drop-regex '^confidential$'
+  ./make-audio case.pdf
+  ./make-audio bb.pdf sfn.pdf
+  ./make-audio --ocr scanned-case.pdf
+  ./make-audio ./case.pdf --drop-regex '^confidential$'
 EOF
 }
 
 use_ocr=false
 dry_run=false
 
-# Wrapper-only flags go before the PDF; everything after it goes to case2audio.
+# Wrapper-only flags go before the PDFs; shared CLI options go after the file list.
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ocr)
@@ -52,17 +56,28 @@ if [[ $# -lt 1 ]]; then
   exit 2
 fi
 
-pdf="$1"
-shift
+pdfs=()
+# Validate every input before starting work, so a typo in the second path costs nothing.
+while [[ $# -gt 0 && "$1" != -* ]]; do
+  pdf="$1"
+  shift
+  # A slash makes the path explicit; bare names always use Downloads to avoid ambiguity.
+  if [[ "$pdf" != */* ]]; then
+    pdf="$HOME/Downloads/$pdf"
+  fi
+  if [[ ! -f "$pdf" ]]; then
+    echo "PDF not found: $pdf" >&2
+    exit 2
+  fi
+  # Resolve paths before changing directories and keep spaces intact in the array.
+  pdf_dir="$(cd -- "$(dirname -- "$pdf")" && pwd -P)"
+  pdfs+=("$pdf_dir/$(basename -- "$pdf")")
+done
 
-if [[ ! -f "$pdf" ]]; then
-  echo "PDF not found: $pdf" >&2
+if [[ ${#pdfs[@]} -eq 0 ]]; then
+  usage >&2
   exit 2
 fi
-
-# Resolve the PDF before changing directories so relative inputs still work.
-pdf_dir="$(cd -- "$(dirname -- "$pdf")" && pwd -P)"
-pdf="$pdf_dir/$(basename -- "$pdf")"
 
 if [[ ! -f "$config_file" ]]; then
   echo "Missing local config: $config_file" >&2
@@ -92,7 +107,7 @@ if [[ ! -x "$case2audio_bin" ]]; then
 fi
 
 command=(
-  "$case2audio_bin" make "$pdf"
+  "$case2audio_bin" make "${pdfs[@]}"
   --bucket "$bucket"
   --region "$region"
   --profile "$profile"

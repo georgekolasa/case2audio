@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -123,6 +125,7 @@ def synthesize_to_directory(
     options: PollyOptions,
     *,
     session: Any | None = None,
+    label: str | None = None,
 ) -> list[AudioPart]:
     """Submit, wait for, and download one or more Polly speech tasks."""
 
@@ -136,14 +139,15 @@ def synthesize_to_directory(
         session = boto3.Session(profile_name=options.profile, region_name=options.region)
 
     # AWS can be quiet for minutes, so confirm immediately that the CLI has moved on to Polly.
-    _print_progress(f"Connecting to Amazon Polly ({options.voice}, {options.engine})...")
+    _print_progress(f"Connecting to Amazon Polly ({options.voice}, {options.engine})...", label)
     polly = session.client("polly")
     s3 = session.client("s3")
     _validate_voice_engine(polly, options)
     chunks = split_for_polly(text)
     part_word = "part" if len(chunks) == 1 else "parts"
     _print_progress(
-        f"Submitting {len(chunks)} audio {part_word} to Polly; this can take several minutes."
+        f"Submitting {len(chunks)} audio {part_word} to Polly; this can take several minutes.",
+        label,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     parts: list[AudioPart] = []
@@ -164,9 +168,7 @@ def synthesize_to_directory(
             raise Case2AudioError(f"Polly rejected part {index}: {exc}") from exc
 
         task_id = response["SynthesisTask"]["TaskId"]
-        _print_progress(
-            f"Polly is processing part {index}/{len(chunks)} (task {task_id})."
-        )
+        _print_progress(f"Polly is processing part {index}/{len(chunks)} (task {task_id}).", label)
         task = _wait_for_task(
             polly,
             task_id,
@@ -177,7 +179,7 @@ def synthesize_to_directory(
         extension = "mp3" if options.output_format == "mp3" else options.output_format
         part_path = output_dir / f"part-{index:03d}.{extension}"
         key = s3_key_from_output_uri(output_uri, options.bucket)
-        _print_progress(f"Polly finished part {index}/{len(chunks)}; downloading audio...")
+        _print_progress(f"Polly finished part {index}/{len(chunks)}; downloading audio...", label)
         try:
             s3.download_file(options.bucket, key, str(part_path))
         except Exception as exc:
@@ -188,10 +190,14 @@ def synthesize_to_directory(
     return parts
 
 
-def _print_progress(message: str) -> None:
-    """Flush progress immediately so buffered terminals never look frozen."""
+def _print_progress(message: str, label: str | None = None) -> None:
+    """Show local start times and PDF names so overlapping jobs can be followed."""
 
-    print(message, flush=True)
+    stamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    document = f" [{label}]" if label else ""
+    # One write keeps worker messages together when several tasks report at once.
+    sys.stdout.write(f"[{stamp}]{document} {message}\n")
+    sys.stdout.flush()
 
 
 def _validate_voice_engine(polly: Any, options: PollyOptions) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 from . import __version__
@@ -44,8 +45,10 @@ def build_parser() -> argparse.ArgumentParser:
     _add_polly_arguments(speak)
     speak.set_defaults(handler=_handle_speak)
 
-    make = subparsers.add_parser("make", help="Extract a PDF, synthesize it, and download audio.")
-    _add_pdf_argument(make)
+    make = subparsers.add_parser(
+        "make", help="Process PDFs into separate audio, with overlapping Polly jobs."
+    )
+    make.add_argument("pdfs", type=Path, nargs="+", help="Source PDFs, followed by shared options.")
     _add_polly_arguments(make)
     make.add_argument("--no-ocr", action="store_true", help="Skip OCR for born-digital PDFs.")
     make.add_argument(
@@ -54,6 +57,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="smart",
     )
     make.add_argument("--drop-regex", action="append", default=[])
+    make.add_argument(
+        "--jobs",
+        type=int,
+        default=2,
+        help="Maximum PDFs processing through Polly at once (default: 2; use 1 for sequential).",
+    )
     make.set_defaults(handler=_handle_make)
 
     doctor = subparsers.add_parser("doctor", help="Check local and AWS prerequisites.")
@@ -116,17 +125,83 @@ def _handle_speak(args: argparse.Namespace) -> int:
 
 def _handle_make(args: argparse.Namespace) -> int:
     from .auth import prepare_session
-    from .extractor import extract_pdf, write_extraction
     from .polly import _validate_voice_engine, synthesize_to_directory
 
-    if not args.pdf.is_file():
-        raise Case2AudioError(f"PDF not found: {args.pdf}")
-    # Resolve login and voice errors before loading models or processing a long PDF.
+    if args.jobs < 1:
+        raise Case2AudioError("--jobs must be at least 1")
+    # Check the whole batch first, including output collisions on case-insensitive filesystems.
+    outputs: set[str] = set()
+    for pdf in args.pdfs:
+        if not pdf.is_file():
+            raise Case2AudioError(f"PDF not found: {pdf}")
+        if pdf.suffix.lower() != ".pdf":
+            raise Case2AudioError(f"Expected a .pdf file: {pdf}")
+        if pdf.stem.casefold() in outputs:
+            raise Case2AudioError(
+                f"PDFs share an output folder name ({pdf.stem!r}). Rename one before batching."
+            )
+        outputs.add(pdf.stem.casefold())
+
+    # One login check covers the batch; SDK credentials can refresh during normal use.
     session = prepare_session(profile=args.profile, region=args.region)
     _validate_voice_engine(session.client("polly"), _polly_options(args))
-    job_dir = args.output_dir / args.pdf.stem
+    pending = {}
+    failures: list[str] = []
+
+    def collect(*, block: bool) -> None:
+        if not pending:
+            return
+        done, _ = wait(pending, timeout=None if block else 0, return_when=FIRST_COMPLETED)
+        for future in done:
+            pdf = pending.pop(future)
+            try:
+                parts = future.result()
+                print(f"Audio ready: {pdf.name}", flush=True)
+                _print_parts(parts)
+            except Exception as exc:
+                failures.append(f"{pdf.name}: {exc}")
+                print(f"Audio failed: {pdf.name}: {exc}", file=sys.stderr, flush=True)
+
+    # Bound paid jobs and keep Docling on the main thread: its native parser is not thread-safe.
+    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        for index, pdf in enumerate(args.pdfs, start=1):
+            collect(block=False)
+            while len(pending) >= args.jobs and not failures:
+                collect(block=True)
+            if failures:
+                break
+            print(f"Processing PDF {index}/{len(args.pdfs)}: {pdf.name}", flush=True)
+            try:
+                narration, audio_dir = _prepare_pdf(args, pdf)
+            except (Case2AudioError, ValueError) as exc:
+                failures.append(f"{pdf.name}: {exc}")
+                break
+            # A running job may have failed while we were extracting the next PDF.
+            collect(block=False)
+            if failures:
+                break
+            # Each worker creates its own SDK session; boto3 sessions must not be shared by threads.
+            future = pool.submit(
+                synthesize_to_directory, narration, audio_dir, _polly_options(args), label=pdf.name
+            )
+            pending[future] = pdf
+
+        # Already submitted jobs can still succeed; download them even if another PDF failed.
+        while pending:
+            collect(block=True)
+    if failures:
+        raise Case2AudioError("Batch stopped; completed outputs kept. " + "; ".join(failures))
+    return 0
+
+
+def _prepare_pdf(args: argparse.Namespace, pdf: Path) -> tuple[str, Path]:
+    """Extract and quality-check locally before handing narration to a Polly worker."""
+
+    from .extractor import extract_pdf, write_extraction
+
+    job_dir = args.output_dir / pdf.stem
     result = extract_pdf(
-        args.pdf,
+        pdf,
         use_ocr=not args.no_ocr,
         table_mode=args.table_mode,
         extra_drop_patterns=tuple(args.drop_regex),
@@ -137,11 +212,7 @@ def _handle_make(args: argparse.Namespace) -> int:
     _print_quality(result.quality_report)
     # Save all local diagnostics first, but never submit unsafe text to a paid service.
     _enforce_quality(result.quality_report)
-    parts = synthesize_to_directory(
-        result.narration, job_dir / "audio", _polly_options(args), session=session
-    )
-    _print_parts(parts)
-    return 0
+    return result.narration, job_dir / "audio"
 
 
 def _polly_options(args: argparse.Namespace):

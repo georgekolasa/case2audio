@@ -3,10 +3,61 @@
 Turn layout-heavy PDFs into clean narration text, then optionally send that text to
 Amazon Polly and download the MP3.
 
-The workflow is intentionally split in two:
+## Run it
 
-1. Docling handles columns, reading order, OCR, and document structure locally.
-2. A small cleanup layer removes narration noise before any paid AWS request happens.
+```bash
+./make-audio ~/Downloads/bb.pdf
+```
+
+That's the normal command. No virtualenv activation or AWS flags needed. Defaults: Matthew,
+Generative, and no OCR for selectable-text PDFs. AWS bucket, region, and profile come from
+`.case2audio.env`.
+
+The command checks AWS access **before extracting the PDF**. If your browser login has expired,
+it runs `aws login --profile case2audio` (or the configured profile), opens the browser, and
+continues after you sign in. SSO profiles use `aws sso login`. Polly progress messages show when
+the task is submitted, processing, and downloading.
+
+The MP3 lands at `generated/bb/audio/part-001.mp3`; the reviewed text is
+`generated/bb/narration.txt`. Documents over 95,000 characters produce ordered audio parts.
+
+```bash
+./make-audio --ocr ~/Downloads/scanned-case.pdf    # Scanned/image-only PDF
+./make-audio ~/Downloads/bb.pdf --table-mode linearize
+./make-audio --dry-run ~/Downloads/bb.pdf         # Show options without running
+```
+
+If you need to refresh the login manually:
+
+```bash
+aws login --profile case2audio
+```
+
+Use the profile from `.case2audio.env`. Bare `aws login` targets `default`, which may have
+unrelated access keys. Automated runs print the correct login command instead of opening a
+browser. Permission and network errors stop early with their actual cause.
+
+## Setup on a new machine
+
+Requires Python 3.12 and AWS CLI v2 with `aws login` support (`brew install python@3.12 awscli`
+on macOS).
+
+```bash
+./scripts/bootstrap.sh
+cp .case2audio.env.example .case2audio.env
+```
+
+Set the local config to your existing bucket and profile. For this setup:
+
+```bash
+CASE2AUDIO_BUCKET=polly-gsk
+CASE2AUDIO_REGION=us-east-1
+CASE2AUDIO_PROFILE=case2audio
+```
+
+On a fresh machine, run `aws login --profile case2audio` once, then use `./make-audio`.
+The first extraction downloads Docling's models. The bucket must already exist in the same
+region as Polly. Use an existing SSO profile if that is how your AWS account is configured.
 
 Source PDFs, extracted text, and audio are ignored by Git so licensed course material does
 not accidentally land on GitHub.
@@ -22,6 +73,7 @@ flowchart LR
         PDF[Source PDF]
         Wrapper[make-audio wrapper]
         CLI[case2audio make]
+        Auth[Check AWS session and refresh browser login]
         Safety[Visual-redaction safety scan]
         Docling[Docling extraction and optional OCR]
         Order[Reading-order repair]
@@ -33,20 +85,24 @@ flowchart LR
         Download[Poll and download]
         MP3[Local MP3 parts]
 
-        PDF --> Wrapper --> CLI --> Safety --> Docling --> Order --> Exhibits --> Clean --> Text
+        PDF --> Wrapper --> CLI --> Auth --> Safety --> Docling --> Order --> Exhibits --> Clean --> Text
         Text --> Quality --> Split
         Download --> MP3
     end
 
     subgraph aws[AWS in the configured region]
         Validate[Validate voice and engine]
+        STS[STS identity check]
         Polly[Amazon Polly async synthesis]
         S3[(Private S3 bucket)]
 
-        Validate --> Polly --> S3
+        Polly --> S3
     end
 
-    Split --> Validate
+    Split --> Polly
+    Auth <--> STS
+    Auth <--> Validate
+    Split -. recheck voice .-> Validate
     S3 --> Download
 ```
 
@@ -68,47 +124,26 @@ The responsibilities are deliberately separated:
   the selected voice/engine in the configured region, and starts asynchronous Polly tasks.
 - Polly writes each completed MP3 to the private S3 bucket. The CLI polls the tasks and downloads
   the files into `generated/<pdf-name>/audio/`.
-- `case2audio make` is the orchestrator: it runs the local `extract` stage and AWS-backed `speak`
-  stage in sequence. `case2audio doctor` only checks local dependencies and AWS access.
+- `case2audio make` checks the configured AWS session and voice before extraction. An expired
+  browser session triggers one login attempt for that same profile in an interactive terminal;
+  it then creates a fresh SDK session and verifies access before continuing. `speak` checks
+  access too; `extract` stays local. `case2audio doctor` only checks dependencies and AWS access.
 
-Only cleaned narration text crosses the AWS boundary; the source PDF and Docling debug files stay
+Only cleaned narration is sent as synthesis content; the source PDF and Docling debug files stay
 local. S3 objects remain in the private bucket until the account's own cleanup or retention policy
 removes them.
 
-## Fast setup
-
-Python 3.12 is recommended. On macOS with Homebrew:
+## Extraction and output
 
 ```bash
-brew install python@3.12
-./scripts/bootstrap.sh
-source .venv/bin/activate
-case2audio doctor
+.venv/bin/case2audio extract ~/Downloads/case.pdf --no-ocr --debug-dir generated/case/debug
 ```
 
-If `doctor` says the AWS token is invalid, refresh the login before synthesis:
+This stays local and writes `generated/case.txt`. If a publisher's notice survives, inspect
+`generated/case/debug/docling.md` and add a narrow rule:
 
 ```bash
-aws login --profile case2audio
-aws sts get-caller-identity --profile case2audio
-```
-
-The first real extraction downloads Docling's local models, so it is much slower than later
-runs.
-
-## Test extraction without spending anything
-
-```bash
-mkdir -p inputs
-cp /path/to/your-case.pdf inputs/
-case2audio extract inputs/your-case.pdf --debug-dir generated/your-case/debug
-```
-
-This writes `generated/your-case.txt`. Read that once before using Polly. If a publisher's
-notice survives, inspect `generated/your-case/debug/docling.md` and add a narrow rule:
-
-```bash
-case2audio extract inputs/your-case.pdf \
+./make-audio ~/Downloads/case.pdf \
   --drop-regex '^confidential course copy$'
 ```
 
@@ -117,69 +152,6 @@ with a clear spoken notice to review the PDF. Large figures get the same treatme
 `--table-mode skip` to omit every table's cells while retaining notices, or `--table-mode linearize`
 to read every table row. The debug `quality-report.txt` records redactions, narrated tables, and
 intentional visual-review notices before anything is sent to Polly.
-
-## Configure AWS once
-
-The CLI uses the standard AWS credential chain. It never stores keys in this repo. AWS CLI
-2.32 or newer can reuse your regular AWS Console sign-in and manage temporary credentials, so
-you do not need permanent access keys or IAM Identity Center just for this project.
-
-```bash
-brew install awscli
-aws login --profile case2audio
-aws s3 mb s3://YOUR-UNIQUE-CASE2AUDIO-BUCKET \
-  --region us-east-1 \
-  --profile case2audio
-```
-
-If your organization already uses IAM Identity Center, use its existing SSO profile instead.
-For a personal account without Identity Center, `aws login` is the simpler route. Prefer a
-least-privilege IAM identity for regular use rather than running ongoing workloads as root.
-
-The bucket must be in the same region as Polly. A narrowly scoped IAM identity needs these
-actions:
-
-- `polly:StartSpeechSynthesisTask`
-- `polly:GetSpeechSynthesisTask`
-- `s3:PutObject` on the chosen bucket so Polly can write the result
-- `s3:GetObject` on the chosen bucket so the CLI can download it
-
-Use your normal AWS security controls for the bucket: block public access and enable default
-encryption. Delete generated objects according to your retention needs.
-
-## One-command PDF to MP3
-
-For the shortest normal workflow, create a machine-local config once:
-
-```bash
-cp .case2audio.env.example .case2audio.env
-```
-
-Set `CASE2AUDIO_BUCKET` in `.case2audio.env`. The local file is ignored by Git so its
-account-specific values do not end up in the public repository. Then run this from any directory;
-activating `.venv` is not required:
-
-```bash
-/path/to/case2audio/make-audio ~/Downloads/your-case.pdf
-```
-
-From the repository itself, that is simply:
-
-```bash
-./make-audio ~/Downloads/your-case.pdf
-```
-
-The wrapper defaults to the `Matthew` Generative voice and skips OCR for normal selectable-text
-PDFs. Use `./make-audio --ocr ~/Downloads/scanned-case.pdf` for an image-only scan. You can safely
-inspect the resolved command first with `./make-audio --dry-run ~/Downloads/your-case.pdf`.
-
-The equivalent full CLI command is:
-
-```bash
-case2audio make inputs/your-case.pdf \
-  --bucket YOUR-UNIQUE-CASE2AUDIO-BUCKET \
-  --region us-east-1
-```
 
 Results appear under `generated/your-case/`:
 
@@ -196,9 +168,7 @@ generated/your-case/
 ```
 
 `part-001.mp3` is the complete audiobook for text under 95,000 characters. Longer documents
-are split at paragraph and sentence boundaries into ordered files. Keeping those parts
-separate avoids an unreliable binary MP3 join; adding automatic ffmpeg concatenation is the
-obvious next feature if you start hitting the limit often.
+are split at paragraph and sentence boundaries into ordered files.
 
 Sidebars detected from their heading and page geometry are moved to a final `Sidebars` section.
 This keeps a box in the left column from interrupting an unfinished sentence in the main article.
@@ -208,32 +178,25 @@ The pre-Polly quality gate stops synthesis if hidden redacted text or a known ru
 survives cleanup. Warnings about numeric tables and figures are non-blocking because the narration
 contains explicit review notices instead of silently losing that material.
 
-Useful options:
+To synthesize previously reviewed text without extracting again:
 
 ```bash
-# Born-digital PDF: skip OCR for a faster run.
-case2audio make inputs/case.pdf --no-ocr --bucket YOUR-BUCKET
-
-# Read every table cell instead of using the smart default.
-case2audio make inputs/case.pdf --table-mode linearize --bucket YOUR-BUCKET
-
-# Use another voice and AWS profile.
-case2audio make inputs/case.pdf \
-  --voice Matthew \
-  --engine generative \
-  --profile school \
-  --bucket YOUR-BUCKET \
-  --region us-east-1
-
-# Re-synthesize previously reviewed text without extracting again.
-case2audio speak generated/case.txt --bucket YOUR-BUCKET
+.venv/bin/case2audio speak generated/case/narration.txt \
+  --bucket polly-gsk --region us-east-1 --profile case2audio \
+  --output-dir generated/case/audio
 ```
 
-Voice support varies by engine and region. If Polly rejects a voice/engine combination, list
-valid choices with:
+## AWS details
+
+Uses the standard SDK credential chain. The bucket must be in the Polly region. Required
+permissions include `polly:DescribeVoices`, `polly:StartSpeechSynthesisTask`,
+`polly:GetSpeechSynthesisTask`, `s3:PutObject`, and `s3:GetObject` for the output bucket.
+The initial session check calls `sts:GetCallerIdentity`.
+
+Voice support varies by engine and region. To list valid choices:
 
 ```bash
-aws polly describe-voices --engine generative --region us-east-1
+aws polly describe-voices --engine generative --region us-east-1 --profile case2audio
 ```
 
 The defaults are `Matthew` + `generative`, which AWS currently offers in `us-east-1` but not
@@ -253,16 +216,6 @@ installed `case2audio` command.
 
 CI runs the fast unit tests and lint checks without downloading Docling models or calling AWS.
 The AWS test uses fakes, so pull requests cannot create paid synthesis tasks.
-
-## Publishing this repo
-
-```bash
-git remote add origin git@github.com:YOUR-USER/case2audio.git
-git push -u origin main
-```
-
-Do not force-add anything under `inputs/` or `generated/`. Keep the resulting audio within the
-personal/course-use rights granted by the source document's license.
 
 ## Reference docs
 

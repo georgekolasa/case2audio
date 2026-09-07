@@ -98,6 +98,7 @@ def _handle_extract(args: argparse.Namespace) -> int:
 
 
 def _handle_speak(args: argparse.Namespace) -> int:
+    from .auth import prepare_session
     from .polly import synthesize_to_directory
     from .quality import ExtractionSignals, assess_narration
 
@@ -107,15 +108,22 @@ def _handle_speak(args: argparse.Namespace) -> int:
     quality_report = assess_narration(text, signals=ExtractionSignals())
     _print_quality(quality_report)
     _enforce_quality(quality_report)
-    parts = synthesize_to_directory(text, args.output_dir, _polly_options(args))
+    session = prepare_session(profile=args.profile, region=args.region)
+    parts = synthesize_to_directory(text, args.output_dir, _polly_options(args), session=session)
     _print_parts(parts)
     return 0
 
 
 def _handle_make(args: argparse.Namespace) -> int:
+    from .auth import prepare_session
     from .extractor import extract_pdf, write_extraction
-    from .polly import synthesize_to_directory
+    from .polly import _validate_voice_engine, synthesize_to_directory
 
+    if not args.pdf.is_file():
+        raise Case2AudioError(f"PDF not found: {args.pdf}")
+    # Resolve login and voice errors before loading models or processing a long PDF.
+    session = prepare_session(profile=args.profile, region=args.region)
+    _validate_voice_engine(session.client("polly"), _polly_options(args))
     job_dir = args.output_dir / args.pdf.stem
     result = extract_pdf(
         args.pdf,
@@ -129,7 +137,9 @@ def _handle_make(args: argparse.Namespace) -> int:
     _print_quality(result.quality_report)
     # Save all local diagnostics first, but never submit unsafe text to a paid service.
     _enforce_quality(result.quality_report)
-    parts = synthesize_to_directory(result.narration, job_dir / "audio", _polly_options(args))
+    parts = synthesize_to_directory(
+        result.narration, job_dir / "audio", _polly_options(args), session=session
+    )
     _print_parts(parts)
     return 0
 

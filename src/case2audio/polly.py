@@ -126,24 +126,34 @@ def synthesize_to_directory(
     *,
     session: Any | None = None,
     label: str | None = None,
+    clients: tuple[Any, Any] | None = None,
 ) -> list[AudioPart]:
     """Submit, wait for, and download one or more Polly speech tasks."""
 
     if not text.strip():
         raise Case2AudioError("Narration text is empty; refusing to submit a paid Polly task.")
 
-    if session is None:
-        # The normal AWS credential chain avoids putting secrets in this repo.
-        import boto3
+    if clients is None:
+        if session is None:
+            import boto3
 
-        session = boto3.Session(profile_name=options.profile, region_name=options.region)
+            # Preserve the login region; select the audio region only on service clients.
+            session = boto3.Session(profile_name=options.profile)
+        clients = (
+            session.client("polly", region_name=options.region),
+            session.client("s3", region_name=options.region),
+        )
 
     # AWS can be quiet for minutes, so confirm immediately that the CLI has moved on to Polly.
     _print_progress(f"Connecting to Amazon Polly ({options.voice}, {options.engine})...", label)
-    polly = session.client("polly")
-    s3 = session.client("s3")
+    polly, s3 = clients
     _validate_voice_engine(polly, options)
     chunks = split_for_polly(text)
+    # Decide readable keys before billing, including separate names for oversized documents.
+    named_keys = [
+        named_audio_key(options, label, index, len(chunks))
+        for index in range(1, len(chunks) + 1)
+    ]
     part_word = "part" if len(chunks) == 1 else "parts"
     _print_progress(
         f"Submitting {len(chunks)} audio {part_word} to Polly; this can take several minutes.",
@@ -153,7 +163,10 @@ def synthesize_to_directory(
     parts: list[AudioPart] = []
 
     for index, chunk in enumerate(chunks, start=1):
-        key_prefix = f"{options.prefix.rstrip('/')}/part-{index:03d}"
+        # Polly always appends a task UUID; keep its originals under a recovery folder.
+        key_prefix = "/".join(
+            part for part in (options.prefix.strip("/"), "_tasks", f"part-{index:03d}") if part
+        )
         try:
             response = polly.start_speech_synthesis_task(
                 Engine=options.engine,
@@ -185,9 +198,41 @@ def synthesize_to_directory(
         except Exception as exc:
             raise Case2AudioError(f"Could not download s3://{options.bucket}/{key}: {exc}") from exc
 
+        named_key = named_keys[index - 1]
+        try:
+            # Copy within S3: no new synthesis. The task original remains available for recovery.
+            s3.copy_object(
+                Bucket=options.bucket,
+                Key=named_key,
+                CopySource={"Bucket": options.bucket, "Key": key},
+            )
+        except Exception as exc:
+            raise Case2AudioError(
+                f"Audio was downloaded to {part_path.resolve()}, but could not copy "
+                f"s3://{options.bucket}/{key} to {named_key}: {exc}. "
+                "Copy the existing S3 object to retry naming; do not rerun synthesis."
+            ) from exc
+        output_uri = f"s3://{options.bucket}/{named_key}"
+        _print_progress(f"Saved named audio: {output_uri}", label)
         parts.append(AudioPart(task_id=task_id, output_uri=output_uri, path=part_path))
 
     return parts
+
+
+def named_audio_key(options: PollyOptions, label: str | None, index: int, total: int) -> str:
+    """Use the source filename, with numbered suffixes only when audio spans multiple parts."""
+
+    stem = Path(label).stem if label else "audio"
+    suffix = f"-part-{index:03d}" if total > 1 else ""
+    key = "/".join(
+        part
+        for part in (options.prefix.strip("/"), f"{stem}{suffix}.{options.output_format}")
+        if part
+    )
+    # S3 measures keys in UTF-8 bytes, which matters for long non-ASCII PDF filenames.
+    if len(key.encode("utf-8")) > 1024:
+        raise Case2AudioError("S3 audio filename is too long; shorten the PDF name or --prefix.")
+    return key
 
 
 def _print_progress(message: str, label: str | None = None) -> None:

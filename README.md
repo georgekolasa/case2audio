@@ -47,8 +47,19 @@ it runs `aws login --profile case2audio` (or the configured profile), opens the 
 continues after you sign in. SSO profiles use `aws sso login`. Polly progress messages show when
 the task is submitted, processing, and downloading.
 
+Recovery also handles AWS's `CreateOAuth2Token` invalid/expired authorization-grant error.
+Valid sessions proceed without browser login; AWS can still require sign-in when a session
+expires or is revoked.
+
 The MP3 lands at `generated/bb/audio/part-001.mp3`; the reviewed text is
 `generated/bb/narration.txt`. Documents over 95,000 characters produce ordered audio parts.
+
+S3 audio uses the PDF name: `bb.pdf` becomes `s3://polly-gsk/case2audio/bb.mp3` and
+`sfn.pdf` becomes `s3://polly-gsk/case2audio/sfn.mp3`. Longer documents use `bb-part-001.mp3`,
+`bb-part-002.mp3`, etc. `--prefix` changes the `case2audio/` folder. A later successful run of
+the same name replaces its readable S3 copy. Local files retain their existing `part-001.mp3`
+layout. Polly's task-ID originals remain under `case2audio/_tasks/` for recovery; the Polly
+task console still links to those originals.
 
 ```bash
 ./make-audio --ocr scanned-case.pdf    # Scanned/image-only PDF
@@ -143,7 +154,10 @@ The responsibilities are deliberately separated:
   Bare filenames resolve from `~/Downloads`; explicit paths keep their supplied location.
 - Docling extraction and quality checks run sequentially on the main thread because of the native
   parser's threading constraints. A bounded worker pool overlaps Polly submission, polling, and
-  downloads for up to `--jobs` PDFs (default 2). Each worker creates its own SDK session.
+  downloads for up to `--jobs` PDFs (default 2). Workers share Polly/S3 clients created on the
+  main thread, so credential refresh is coordinated instead of racing the same cached token.
+  The SDK session preserves the AWS profile's login region; `CASE2AUDIO_REGION` selects only
+  the service region for Polly, S3, and STS.
 - `case2audio extract` runs entirely on the local machine. Docling reads the PDF, the reading-order
   layer repairs misplaced headings and moves real sidebars out of the main narrative, and the
   cleanup layer removes page furniture, duplicate headings, and other material that sounds bad
@@ -156,8 +170,9 @@ The responsibilities are deliberately separated:
   any paid synthesis request is made. The quality report blocks known redaction or footer leaks.
 - `case2audio speak` splits reviewed narration at safe paragraph or sentence boundaries, validates
   the selected voice/engine in the configured region, and starts asynchronous Polly tasks.
-- Polly writes each completed MP3 to the private S3 bucket. The CLI polls the tasks and downloads
-  the files into `generated/<pdf-name>/audio/`.
+- Polly writes each completed MP3 to the private S3 bucket under `_tasks/`. The CLI polls the tasks,
+  downloads the files into `generated/<pdf-name>/audio/`, then copies the S3 objects to readable
+  PDF-based names. This copy uses existing audio and does not submit another synthesis task.
 - `case2audio make` checks the configured AWS session and voice before extraction. An expired
   browser session triggers one login attempt for that same profile in an interactive terminal;
   it then creates a fresh SDK session and verifies access before continuing. `speak` checks

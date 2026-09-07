@@ -118,7 +118,11 @@ def _handle_speak(args: argparse.Namespace) -> int:
     _print_quality(quality_report)
     _enforce_quality(quality_report)
     session = prepare_session(profile=args.profile, region=args.region)
-    parts = synthesize_to_directory(text, args.output_dir, _polly_options(args), session=session)
+    # Generated narration files share a filename; their parent folder identifies the PDF.
+    label = f"{args.text.parent.name}.txt" if args.text.name == "narration.txt" else args.text.name
+    parts = synthesize_to_directory(
+        text, args.output_dir, _polly_options(args), session=session, label=label
+    )
     _print_parts(parts)
     return 0
 
@@ -144,7 +148,12 @@ def _handle_make(args: argparse.Namespace) -> int:
 
     # One login check covers the batch; SDK credentials can refresh during normal use.
     session = prepare_session(profile=args.profile, region=args.region)
-    _validate_voice_engine(session.client("polly"), _polly_options(args))
+    # Build clients before starting threads. Shared clients share one credential refresh lock.
+    clients = (
+        session.client("polly", region_name=args.region),
+        session.client("s3", region_name=args.region),
+    )
+    _validate_voice_engine(clients[0], _polly_options(args))
     pending = {}
     failures: list[str] = []
 
@@ -180,9 +189,15 @@ def _handle_make(args: argparse.Namespace) -> int:
             collect(block=False)
             if failures:
                 break
-            # Each worker creates its own SDK session; boto3 sessions must not be shared by threads.
+            # Separate sessions can race when rotating the same cached login refresh token.
+            # Clients are thread-safe; creating clients through a shared Session is not.
             future = pool.submit(
-                synthesize_to_directory, narration, audio_dir, _polly_options(args), label=pdf.name
+                synthesize_to_directory,
+                narration,
+                audio_dir,
+                _polly_options(args),
+                label=pdf.name,
+                clients=clients,
             )
             pending[future] = pdf
 
@@ -263,11 +278,11 @@ def _handle_doctor(args: argparse.Namespace) -> int:
     try:
         import boto3
 
-        session = boto3.Session(profile_name=args.profile, region_name=args.region)
-        identity = session.client("sts").get_caller_identity()
+        session = boto3.Session(profile_name=args.profile)
+        identity = session.client("sts", region_name=args.region).get_caller_identity()
         checks.append(("AWS credentials", True, identity["Arn"]))
-        region = session.region_name or "not configured"
-        checks.append(("AWS region", session.region_name is not None, region))
+        region = args.region or session.region_name
+        checks.append(("AWS region", region is not None, region or "not configured"))
     except Exception as exc:
         checks.append(("AWS credentials", False, str(exc)))
 

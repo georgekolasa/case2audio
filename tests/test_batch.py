@@ -61,6 +61,9 @@ def test_batch_preserves_order_and_separate_outputs_with_one_login(batch, capsys
     assert [call.args[0] for call in batch.extract.call_args_list] == batch.pdfs
     calls = {call.args[0]: call for call in batch.synthesize.call_args_list}
     assert set(calls) == {"bb", "sfn"}
+    # Both workers must share exactly the same client pair and credential refresh lock.
+    assert calls["bb"].kwargs["clients"] is calls["sfn"].kwargs["clients"]
+    assert batch.session.client.call_count == 2
     for pdf, write in zip(batch.pdfs, batch.write.call_args_list, strict=True):
         synth = calls[pdf.stem]
         assert write.args[1] == batch.args.output_dir / pdf.stem / "narration.txt"

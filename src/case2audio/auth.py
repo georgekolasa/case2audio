@@ -25,11 +25,12 @@ def prepare_session(*, profile: str | None, region: str | None) -> Any:
 
     session = None
     try:
-        session = boto3.Session(profile_name=profile, region_name=region)
+        # Login tokens refresh in the profile's region; the Polly bucket may be elsewhere.
+        session = boto3.Session(profile_name=profile)
         # Resolve the effective profile once so recovery never falls back to another account.
         profile = session.profile_name
         print(f"Checking AWS session (profile: {profile})...", flush=True)
-        session.client("sts").get_caller_identity()
+        session.client("sts", region_name=region).get_caller_identity()
     except Exception as exc:
         login_kind = _login_kind(exc, session)
         if login_kind is None:
@@ -57,8 +58,8 @@ def prepare_session(*, profile: str | None, region: str | None) -> Any:
             # Pass an argument list so profile names never become shell commands.
             subprocess.run(command, check=True)
             # The old SDK session may retain expired credentials in memory.
-            session = boto3.Session(profile_name=profile, region_name=region)
-            session.client("sts").get_caller_identity()
+            session = boto3.Session(profile_name=profile)
+            session.client("sts", region_name=region).get_caller_identity()
         except (OSError, subprocess.CalledProcessError) as login_exc:
             raise Case2AudioError(f"AWS login did not finish. Retry: {recovery}") from login_exc
         except Exception as login_exc:
@@ -77,6 +78,18 @@ def _login_kind(exc: Exception, session: Any) -> list[str] | None:
         return ["login"]
     if isinstance(exc, (UnauthorizedSSOTokenError, SSOTokenLoadError)):
         return ["sso", "login"]
+    if isinstance(exc, ClientError):
+        error = exc.response.get("Error", {})
+        message = error.get("Message", "").casefold()
+        # Botocore only translates some refresh failures into LoginRefreshRequired.
+        # AWS also returns this raw token-exchange error when the grant is no longer usable.
+        if (
+            exc.operation_name == "CreateOAuth2Token"
+            and error.get("Code") == "ValidationException"
+            and "authorization grant" in message
+            and any(word in message for word in ("invalid", "expired", "revoked", "malformed"))
+        ):
+            return ["login"]
     if isinstance(exc, ClientError) and exc.response["Error"]["Code"] in {
         "ExpiredToken",
         "ExpiredTokenException",

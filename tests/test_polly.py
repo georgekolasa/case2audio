@@ -1,8 +1,10 @@
 import re
 from pathlib import Path
+from unittest.mock import Mock
 
 from case2audio.polly import (
     PollyOptions,
+    named_audio_key,
     s3_key_from_output_uri,
     split_for_polly,
     synthesize_to_directory,
@@ -62,6 +64,10 @@ class FakePolly:
 class FakeS3:
     def __init__(self) -> None:
         self.download_calls = []
+        self.copy_calls = []
+
+    def copy_object(self, **kwargs):
+        self.copy_calls.append(kwargs)
 
     def download_file(self, bucket, key, filename):
         self.download_calls.append((bucket, key, filename))
@@ -73,9 +79,45 @@ class FakeSession:
     def __init__(self) -> None:
         self.polly = FakePolly()
         self.s3 = FakeS3()
+        self.client_calls = []
 
-    def client(self, name):
+    def client(self, name, **kwargs):
+        self.client_calls.append((name, kwargs))
         return self.polly if name == "polly" else self.s3
+
+
+def test_service_region_does_not_override_login_region(tmp_path, monkeypatch):
+    import boto3
+
+    session = FakeSession()
+    factory = Mock(return_value=session)
+    monkeypatch.setattr(boto3, "Session", factory)
+    synthesize_to_directory(
+        "A short case.",
+        tmp_path,
+        PollyOptions(bucket="example", profile="case2audio", region="us-east-1"),
+    )
+    factory.assert_called_once_with(profile_name="case2audio")
+    assert session.client_calls == [
+        ("polly", {"region_name": "us-east-1"}),
+        ("s3", {"region_name": "us-east-1"}),
+    ]
+
+
+def test_shared_clients_do_not_create_a_second_credential_session(tmp_path, monkeypatch):
+    import boto3
+
+    factory = Mock(side_effect=AssertionError("Worker must reuse the prepared clients"))
+    monkeypatch.setattr(boto3, "Session", factory)
+    session = FakeSession()
+    parts = synthesize_to_directory(
+        "A short case.",
+        tmp_path,
+        PollyOptions(bucket="example"),
+        clients=(session.polly, session.s3),
+    )
+    assert parts[0].path.read_bytes() == b"fake mp3"
+    factory.assert_not_called()
 
 
 def test_synthesis_submits_waits_and_downloads(tmp_path: Path, capsys) -> None:
@@ -93,6 +135,14 @@ def test_synthesis_submits_waits_and_downloads(tmp_path: Path, capsys) -> None:
     assert parts[0].path.read_bytes() == b"fake mp3"
     assert session.polly.start_calls[0]["Text"] == "A short case."
     assert session.s3.download_calls[0][1] == "job/task-123.mp3"
+    assert session.s3.copy_calls == [
+        {
+            "Bucket": "example",
+            "Key": "case2audio/bb.mp3",
+            "CopySource": {"Bucket": "example", "Key": "job/task-123.mp3"},
+        }
+    ]
+    assert parts[0].output_uri == "s3://example/case2audio/bb.mp3"
     progress = capsys.readouterr().out
     assert "Connecting to Amazon Polly (Matthew, generative)" in progress
     assert "Submitting 1 audio part to Polly" in progress
@@ -121,3 +171,44 @@ def test_synthesis_rejects_unsupported_voice_before_starting_task(tmp_path: Path
         raise AssertionError("Expected unsupported voice settings to fail")
 
     assert session.polly.start_calls == []
+
+
+def test_large_document_copies_each_part_to_a_distinct_name(tmp_path):
+    session = FakeSession()
+    parts = synthesize_to_directory(
+        "word " * 20_000,
+        tmp_path,
+        PollyOptions(bucket="example"),
+        session=session,
+        label="bb.pdf",
+    )
+    assert len(parts) == 2
+    assert [call["Key"] for call in session.s3.copy_calls] == [
+        "case2audio/bb-part-001.mp3",
+        "case2audio/bb-part-002.mp3",
+    ]
+
+
+def test_readable_key_preserves_spaces_and_dots():
+    options = PollyOptions(bucket="example", prefix="custom/")
+    assert named_audio_key(options, "My case.v2.pdf", 1, 1) == "custom/My case.v2.mp3"
+    assert named_audio_key(PollyOptions(bucket="example", prefix=""), "bb.pdf", 1, 1) == "bb.mp3"
+
+
+def test_copy_failure_keeps_download_and_does_not_resynthesize(tmp_path):
+    import pytest
+
+    from case2audio.errors import Case2AudioError
+
+    session = FakeSession()
+    session.s3.copy_object = Mock(side_effect=RuntimeError("copy denied"))
+    with pytest.raises(Case2AudioError, match="do not rerun synthesis"):
+        synthesize_to_directory(
+            "A short case.",
+            tmp_path,
+            PollyOptions(bucket="example"),
+            session=session,
+            label="bb.pdf",
+        )
+    assert (tmp_path / "part-001.mp3").read_bytes() == b"fake mp3"
+    assert len(session.polly.start_calls) == 1

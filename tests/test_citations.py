@@ -125,7 +125,7 @@ def test_complete_source_line_does_not_consume_dated_body_paragraph():
     ]
 
 
-def test_extraction_opt_out_keeps_citations(monkeypatch):
+def test_extraction_always_filters_citations(monkeypatch):
     from case2audio import extractor
 
     blocks = [
@@ -150,9 +150,7 @@ def test_extraction_opt_out_keeps_citations(monkeypatch):
     monkeypatch.setattr(extractor, "_visual_blocks", lambda *args: ([], 0))
     monkeypatch.setattr(extractor, "order_for_narration", lambda blocks: (blocks, []))
     filtered, signals = extractor._build_narration_markdown(document, "body", "smart")
-    full, _ = extractor._build_narration_markdown(document, "body", "smart", keep_citations=True)
     assert "Smith" not in filtered
-    assert "Smith" in full
     assert signals.omitted_citation_blocks == 2
 
 

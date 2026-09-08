@@ -32,7 +32,6 @@ def extract_pdf(
     use_ocr: bool = True,
     table_mode: str = "smart",
     extra_drop_patterns: tuple[str, ...] = (),
-    keep_citations: bool = False,
 ) -> ExtractionResult:
     """Extract one local PDF and omit Docling's furniture layer."""
 
@@ -84,7 +83,6 @@ def extract_pdf(
         document,
         ContentLayer.BODY,
         table_mode,
-        keep_citations=keep_citations,
     )
 
     # Never persist selectable text that the rendered PDF deliberately covers.
@@ -143,8 +141,6 @@ def _build_narration_markdown(
     document,
     body_layer,
     table_mode: str,
-    *,
-    keep_citations: bool = False,
 ) -> tuple[str, ExtractionSignals]:
     """Map Docling items into the small geometry model used by reading-order policy."""
 
@@ -165,14 +161,12 @@ def _build_narration_markdown(
     blocks.extend(visual_blocks)
 
     main, sidebars = order_for_narration(blocks)
-    omitted = explanations = 0
-    if not keep_citations:
-        # Filter each narrative separately so an article's references cannot swallow a sidebar.
-        filtered = [filter_citation_blocks(stream) for stream in [main, *sidebars]]
-        main = filtered[0].blocks
-        sidebars = [result.blocks for result in filtered[1:] if result.blocks]
-        omitted = sum(result.omitted for result in filtered)
-        explanations = sum(result.explanations for result in filtered)
+    # Filter each narrative separately so an article's references cannot swallow a sidebar.
+    filtered = [filter_citation_blocks(stream) for stream in [main, *sidebars]]
+    main = filtered[0].blocks
+    sidebars = [result.blocks for result in filtered[1:] if result.blocks]
+    omitted = sum(result.omitted for result in filtered)
+    explanations = sum(result.explanations for result in filtered)
     signals = ExtractionSignals(
         narrated_text_tables=narrated_tables,
         omitted_data_tables=omitted_tables,

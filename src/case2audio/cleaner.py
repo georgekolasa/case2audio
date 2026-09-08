@@ -6,10 +6,11 @@ import html
 import re
 from dataclasses import dataclass
 
+from .boilerplate import strip_publishing_boilerplate
+
 # These are intentionally narrow: deleting real case prose is worse than leaving minor noise.
 DEFAULT_DROP_PATTERNS = (
     r"^this document is authorized for use only by\b.*$",
-    r"^copyright\s+[©(]?\s*\d{4}\b.*$",
     r"^article reprint no\.\s*\S+\s*$",
     r"^a newsletter from .* publishing\b.*$",
     r"^decision-making and communication strategies that deliver results$",
@@ -52,6 +53,7 @@ def clean_markdown(markdown: str, options: CleanerOptions | None = None) -> str:
     text = _IMAGE_RE.sub("", text)
     text = _LINK_RE.sub(r"\1", text)
     text = _HTML_TAG_RE.sub("", text)
+    text = strip_publishing_boilerplate(text)
 
     all_drop_patterns = (*DEFAULT_DROP_PATTERNS, *options.extra_drop_patterns)
     drop_patterns = tuple(re.compile(pattern, re.IGNORECASE) for pattern in all_drop_patterns)

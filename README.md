@@ -212,13 +212,14 @@ footnotes are retained rather than risking removal of useful case content. Inlin
 that cannot be distinguished safely from real numbers may still appear.
 
 Raw Docling Markdown/JSON retain the sources for review. The quality report records omitted
-citation blocks and retained notes. To include citations in a future run:
+citation blocks and retained notes. Citation filtering always applies during PDF extraction.
 
-```bash
-./make-audio bb.pdf sfn.pdf --keep-citations
-```
-
-This option also works with `case2audio extract`. Existing MP3s are not modified.
+Recognized copyright headings, copyright notices (including `©` year ranges), editorial-version
+notices, teaching-use disclaimers, and reproduction-permission boilerplate are also omitted.
+Cleanup removes notice sentences rather than whole sections, because PDF extraction can merge
+the next real paragraph into a notice. Ordinary discussion of copyright and licensing is kept;
+unfamiliar publisher wording may still need a targeted rule. Raw extraction retains the notices.
+These rules affect future narration only; existing MP3s are not modified.
 
 Results appear under `generated/your-case/`:
 

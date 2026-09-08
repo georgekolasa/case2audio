@@ -41,8 +41,8 @@ def test_explanatory_footnotes_and_numbers_survive():
     )
     assert [item.text for item in result.blocks] == [
         "Revenue was 2024 million, up 20%. See Exhibit 3.",
-        "This model assumes two firms. However, pricing can vary.",
-        "Sales grew in 2024 because demand increased.",
+        "Explanatory note: This model assumes two firms. However, pricing can vary.",
+        "Explanatory note: Sales grew in 2024 because demand increased.",
     ]
     assert result.explanations == 2
 
@@ -99,6 +99,13 @@ def test_source_label_continuations_do_not_swallow_following_prose():
         "The company then expanded.",
         "Figures are in millions.",
     ]
+
+
+def test_inline_source_keeps_following_metric_definition():
+    result = filter_citation_blocks(
+        [block("Sources: Compustat Fundamentals Annual. ROIC is net income divided by capital.")]
+    )
+    assert [item.text for item in result.blocks] == ["ROIC is net income divided by capital."]
 
 
 def test_book_recommendation_is_citation_only():
@@ -164,3 +171,41 @@ def test_continued_reference_heading_does_not_resume_narrative():
         ]
     )
     assert result.blocks == []
+
+
+def test_mixed_notes_lose_provenance_but_keep_qualifications():
+    result = filter_citation_blocks(
+        [
+            block("Endnotes", "section_header"),
+            block(
+                '1 Smith, "Costs," 2024. Figures are adjusted to 2026. '
+                "Used with attribution as required by a license; confirm permission.",
+                "footnote",
+            ),
+            block('2 Jones, "Costs," 2024. Figures are adjusted to 2026.', "footnote"),
+            block(
+                '3 Figures exclude freight. Jones, "Costs," 2024. However, revenue includes taxes.',
+                "footnote",
+            ),
+            block(
+                "4 This statement, and all others by Tom unless otherwise noted, "
+                "are from an interview with case writers in 2024.",
+                "footnote",
+            ),
+            block(
+                "5 The previous draft's statement could not be verified and was removed.",
+                "footnote",
+            ),
+        ]
+    )
+    assert [b.text for b in result.blocks] == [
+        "Explanatory notes",
+        "Figures are adjusted to 2026.",
+        "Figures exclude freight. However, revenue includes taxes.",
+    ]
+
+
+def test_dated_explanations_and_quotes_are_not_deleted():
+    text = 'The company reported "record sales" in 2024, despite higher costs.'
+    result = filter_citation_blocks([block("1 " + text, "footnote")])
+    assert result.blocks[0].text == f"Explanatory note: {text}"

@@ -172,11 +172,23 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
     merged: list[TextBlock] = []
     for block in blocks:
         # Repeated running headers are visual navigation, not narration.
-        if re.search(r"\(continued\)\s*$", block.text, re.IGNORECASE):
+        if block.label == "section_header" and re.search(
+            r"\(continued\)\s*$", block.text, re.IGNORECASE
+        ):
             continue
         if merged and _should_merge(merged[-1], block):
             merged[-1] = replace(
                 merged[-1], text=f"{merged[-1].text.rstrip()} {block.text.lstrip()}"
+            )
+        elif (
+            block.label == "text"
+            and re.match(r"^[a-z]", block.text.lstrip())
+            and (target := _continuation_before_footnotes(merged, block)) is not None
+        ):
+            # Page-bottom footnotes can sit between two halves of one body paragraph.
+            merged[target] = replace(
+                merged[target],
+                text=f"{merged[target].text.rstrip()} {block.text.lstrip()}",
             )
         else:
             merged.append(block)
@@ -184,12 +196,23 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
 
 
 def _should_merge(previous: TextBlock, current: TextBlock) -> bool:
-    if previous.label != "text" or current.label != "text":
+    if previous.label not in {"text", "list_item"} or current.label != "text":
         return False
     if re.search(r"[.!?][\"')\]]?\s*$", previous.text):
         return False
     # Lowercase starts strongly indicate a sentence continued across a column or page.
     return re.match(r"^[a-z]", current.text.lstrip()) is not None
+
+
+def _continuation_before_footnotes(merged: list[TextBlock], current: TextBlock) -> int | None:
+    """Find an unfinished prior-page paragraph across only intervening footnotes."""
+
+    index = len(merged) - 1
+    while index >= 0 and merged[index].label == "footnote":
+        index -= 1
+    if index < 0 or current.page <= merged[index].page:
+        return None
+    return index if _should_merge(merged[index], current) else None
 
 
 def _render_blocks(blocks: list[TextBlock]) -> str:

@@ -7,9 +7,12 @@ import re
 from dataclasses import dataclass
 
 from .boilerplate import strip_publishing_boilerplate
+from .word_repairs import repair_words
 
 # These are intentionally narrow: deleting real case prose is worse than leaving minor noise.
 DEFAULT_DROP_PATTERNS = (
+    r"^id\s*#\s*\S+\s*$",
+    r"^published on\s+.+$",
     r"^this document is authorized for use only by\b.*$",
     r"^article reprint no\.\s*\S+\s*$",
     r"^a newsletter from .* publishing\b.*$",
@@ -115,6 +118,15 @@ def clean_markdown(markdown: str, options: CleanerOptions | None = None) -> str:
     # Restore deliberate table row breaks after ordinary prose lines have been joined.
     text = re.sub(rf"{_HARD_BREAK}\s*", "\n", text)
     text = re.sub(r"[ \t]+", " ", text)
+    text = repair_words(text)
+    # A space only before a hyphen is a PDF layout error, unlike a spaced em-dash substitute.
+    text = re.sub(r"(?<=[A-Za-z])\s+-(?=[A-Za-z])", "-", text)
+    # Voices read a bare range dash inconsistently; "to" is unambiguous for year ranges.
+    text = re.sub(
+        r"\b((?:FY)?(?:19|20)\d{2})\s+[–—-]\s+((?:FY)?(?:19|20)\d{2})\b",
+        r"\1 to \2",
+        text,
+    )
     # Repair a few high-confidence PDF joins without applying risky general spellcheck.
     text = re.sub(r"\broduct\b", "product", text, flags=re.IGNORECASE)
     text = re.sub(
@@ -132,11 +144,13 @@ def clean_markdown(markdown: str, options: CleanerOptions | None = None) -> str:
     # These words after a lost em dash are discourse, not compound-word suffixes.
     # Leave forms such as "up-and-comers" alone: the second hyphen proves it is a compound.
     text = re.sub(
-        r"(?<=\w)-(?=(?:and|but|or|name|straight|was|were)\b(?!-))",
+        r"(?<=\w)-(?=(?:and|but|or|straight|was|were)\b(?!-))",
         " - ",
         text,
         flags=re.IGNORECASE,
     )
+    # The source pattern was "deadlines-name a setback"; do not break real "no-name" compounds.
+    text = re.sub(r"(?<=s)-(?=name\b)", " - ", text, flags=re.I)
     # A lower-case plural followed by a capitalized name usually marks a lost em dash.
     text = re.sub(r"(?<=s)-(?=[A-Z])", " - ", text)
     text = re.sub(r"\bman power\b", "manpower", text, flags=re.IGNORECASE)
@@ -144,8 +158,14 @@ def clean_markdown(markdown: str, options: CleanerOptions | None = None) -> str:
     text = re.sub(r"(?m)^Exhibits\s+(?=Exhibit\b)", "Exhibits.\n\n", text)
     # A standalone emphasis marker before a parenthetical should not be spoken as punctuation.
     text = text.replace("*(", "(")
-    # Drop caps sometimes arrive as "W HEN"; joining only one letter is deliberately narrow.
-    text = re.sub(r"(?m)^([A-Z])\s+([A-Z]{2,})\b", r"\1\2", text)
+    # A following lowercase word distinguishes a broken drop cap from an all-caps heading.
+    text = re.sub(r"(?m)^([A-Z])\s+([A-Z]{2,})(?=\s+[a-z])", r"\1\2", text)
+    # PDF typography often leaves spaces around apostrophes and terminal punctuation.
+    text = re.sub(r"\b([A-Za-z]+)\s+(['’]s)\b", r"\1\2", text)
+    text = re.sub(r"\b([A-Za-z]+)\s+(['’])(?=\s|[,.])", r"\1\2", text)
+    text = re.sub(r"\s+([,.])", r"\1", text)
+    text = re.sub(r"\(\s+", "(", text)
+    text = re.sub(r"\s+\)", ")", text)
     # Older PDFs can lose a dash at an italic boundary around this common phrase.
     text = re.sub(r"\bquestions(?=what, how, and why\b)", "questions - ", text, flags=re.I)
     # Contact details add little to an audiobook but often contain awkward punctuation.

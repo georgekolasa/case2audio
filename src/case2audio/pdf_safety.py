@@ -122,8 +122,7 @@ def _has_dark_fill(
     if not pdfium_c.FPDFPageObj_GetFillColor(obj.raw, red, green, blue, alpha):
         return False
     return (
-        max(red.value, green.value, blue.value) <= maximum_channel
-        and alpha.value >= minimum_alpha
+        max(red.value, green.value, blue.value) <= maximum_channel and alpha.value >= minimum_alpha
     )
 
 

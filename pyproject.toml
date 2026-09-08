@@ -34,6 +34,8 @@ where = ["src"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+# Tests must exercise working-tree changes, not a stale installed CLI package.
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 100

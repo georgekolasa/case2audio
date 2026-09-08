@@ -151,8 +151,7 @@ def synthesize_to_directory(
     chunks = split_for_polly(text)
     # Decide readable keys before billing, including separate names for oversized documents.
     named_keys = [
-        named_audio_key(options, label, index, len(chunks))
-        for index in range(1, len(chunks) + 1)
+        named_audio_key(options, label, index, len(chunks)) for index in range(1, len(chunks) + 1)
     ]
     part_word = "part" if len(chunks) == 1 else "parts"
     _print_progress(

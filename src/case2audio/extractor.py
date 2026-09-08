@@ -10,6 +10,14 @@ from pathlib import Path
 from .citations import filter_citation_blocks
 from .cleaner import CleanerOptions, clean_markdown
 from .errors import Case2AudioError
+from .furniture import strip_margin_furniture
+from .inline_refs import (
+    contains_reference_anchor,
+    reference_sequence_markers,
+    repair_source_word_joins,
+    scan_pdf_text_evidence,
+    strip_inline_references,
+)
 from .pdf_safety import scan_visual_redactions, scrub_hidden_text, scrub_hidden_values
 from .quality import ExtractionSignals, QualityReport, assess_narration
 from .reading_order import TextBlock, order_for_narration, render_markdown
@@ -79,10 +87,13 @@ def extract_pdf(
         page_break_placeholder="\n\n",
     )
     # Our geometry layer repairs headings and explains content that cannot safely become speech.
+    evidence = scan_pdf_text_evidence(path)
     narration_markdown, signals = _build_narration_markdown(
         document,
         ContentLayer.BODY,
         table_mode,
+        references=evidence.references,
+        word_joins=evidence.word_joins,
     )
 
     # Never persist selectable text that the rendered PDF deliberately covers.
@@ -141,6 +152,9 @@ def _build_narration_markdown(
     document,
     body_layer,
     table_mode: str,
+    *,
+    references=(),
+    word_joins=(),
 ) -> tuple[str, ExtractionSignals]:
     """Map Docling items into the small geometry model used by reading-order policy."""
 
@@ -150,17 +164,40 @@ def _build_narration_markdown(
             continue
         # Header/footer labels are skipped even if a parser accidentally marks them BODY.
         label = item.label.value
-        if label in {"page_header", "page_footer"}:
+        blocks.extend(_text_blocks_from_item(document, item, label))
+
+    # Remove furniture while page geometry is still intact, before continuation merging.
+    blocks, removed_furniture = strip_margin_furniture(blocks)
+    blocks, removed_front_matter = _strip_front_matter(blocks)
+    blocks, omitted_table_notes = _strip_low_value_table_notes(blocks)
+    known_markers = {
+        match.group(1)
+        for block in blocks
+        if block.label == "footnote"
+        if (match := re.match(r"^\s*(\d{1,3}|[ivxlcdm]{1,4})[.)]?\s+", block.text))
+    }
+    known_markers.update(reference_sequence_markers(references))
+    removed_markers = repaired_words = 0
+    for index, block in enumerate(blocks):
+        if block.label not in {"text", "list_item", "caption"}:
             continue
+        text, count = strip_inline_references(block, references, known_markers)
+        repaired, word_count = repair_source_word_joins(replace(block, text=text), word_joins)
+        blocks[index] = replace(block, text=repaired)
+        removed_markers += count
+        repaired_words += word_count
 
-        blocks.append(_block_from_item(document, item, text=item.text, label=label))
-
+    pictures = _content_pictures(document)
+    blocks, removed_visual_labels = _strip_visual_labels(blocks, pictures)
     table_blocks, narrated_tables, omitted_tables = _table_blocks(document, table_mode)
-    visual_blocks, marked_visuals = _visual_blocks(document)
+    visual_blocks, marked_visuals = _visual_blocks(document, pictures)
     blocks.extend(table_blocks)
     blocks.extend(visual_blocks)
 
     main, sidebars = order_for_narration(blocks)
+    # Physical page-bottom footnotes are reordered only after body reading order is stable.
+    main = _place_referenced_footnotes(main, references)
+    sidebars = [_place_referenced_footnotes(sidebar, references) for sidebar in sidebars]
     # Filter each narrative separately so an article's references cannot swallow a sidebar.
     filtered = [filter_citation_blocks(stream) for stream in [main, *sidebars]]
     main = filtered[0].blocks
@@ -173,14 +210,127 @@ def _build_narration_markdown(
         marked_visuals=marked_visuals,
         omitted_citation_blocks=omitted,
         retained_explanatory_notes=explanations,
+        removed_margin_blocks=removed_furniture,
+        removed_inline_markers=removed_markers,
+        repaired_source_words=repaired_words,
+        removed_front_matter_blocks=removed_front_matter,
+        omitted_table_notes=omitted_table_notes,
+        removed_visual_labels=removed_visual_labels,
     )
     return render_markdown(main, sidebars), signals
 
 
-def _block_from_item(document, item, *, text: str, label: str = "text") -> TextBlock:
+def _strip_front_matter(blocks: list[TextBlock]) -> tuple[list[TextBlock], int]:
+    """Drop cover-page affiliations and acknowledgments without eating page-two prose."""
+
+    headings = re.compile(r"^(?:author affiliations?|acknowledg(?:e)?ments?)\s*:?$", re.I)
+    output: list[TextBlock] = []
+    active_page: int | None = None
+    removed = 0
+    for block in blocks:
+        if block.label == "section_header" and headings.fullmatch(block.text.strip()):
+            active_page = block.page
+            removed += 1
+            continue
+        if active_page is not None:
+            if block.page != active_page or block.label == "section_header":
+                active_page = None
+            else:
+                removed += 1
+                continue
+        output.append(block)
+    return output, removed
+
+
+def _strip_low_value_table_notes(blocks: list[TextBlock]) -> tuple[list[TextBlock], int]:
+    """Remove notes that only inventory omitted table cells or unavailable values."""
+
+    clutter = re.compile(
+        r"^Notes?\s*:\s*(?:Countries are listed\b|Brooklyn Brewery did not have\b|"
+        r"Lager is Brooklyn Lager\b|Examples of (?:super premium|craft competitor)\b)",
+        re.I,
+    )
+    # Classification ignores PDF column spacing while preserving the original retained text.
+    kept = [block for block in blocks if not clutter.match(" ".join(block.text.split()))]
+    return kept, len(blocks) - len(kept)
+
+
+def _place_referenced_footnotes(blocks: list[TextBlock], references) -> list[TextBlock]:
+    """Put footnotes after their referring paragraph so retained explanations have context."""
+
+    insertions: dict[int, list[TextBlock]] = {}
+    moved: set[int] = set()
+    for footnote_index, footnote in enumerate(blocks):
+        if footnote.label != "footnote":
+            continue
+        match = re.match(r"^\s*(\d{1,3}|[ivxlcdm]{1,4})[.)]?\s+", footnote.text, re.I)
+        if not match:
+            continue
+        marker = match.group(1).casefold()
+        for reference in references:
+            if reference.page != footnote.page or reference.marker.casefold() != marker:
+                continue
+            target = next(
+                (
+                    index
+                    for index, candidate in enumerate(blocks)
+                    if candidate.label in {"text", "list_item", "caption"}
+                    and candidate.page == reference.page
+                    and contains_reference_anchor(candidate.text, reference)
+                ),
+                None,
+            )
+            if target is not None and target != footnote_index:
+                insertions.setdefault(target, []).append(footnote)
+                moved.add(footnote_index)
+                break
+
+    output: list[TextBlock] = []
+    for index, block in enumerate(blocks):
+        if index not in moved:
+            output.append(block)
+        output.extend(insertions.get(index, ()))
+    return output
+
+
+def _text_blocks_from_item(document, item, label):
+    # Docling can merge text across pages; split its character spans before using geometry.
+    if len(item.prov) > 1:
+        spans = sorted(item.prov, key=lambda p: p.charspan[0])
+        cursor = 0
+        valid = True
+        for prov in spans:
+            start, end = prov.charspan
+            if (
+                start < cursor
+                or end < start
+                or end > len(item.text)
+                or item.text[cursor:start].strip()
+            ):
+                valid = False
+                break
+            cursor = end
+        if valid and not item.text[cursor:].strip():
+            return [
+                _block_from_item(
+                    document,
+                    item,
+                    text=item.text[p.charspan[0] : p.charspan[1]],
+                    label=label,
+                    provenance=p,
+                )
+                for p in spans
+            ]
+    # If provenance is incomplete, preserve the whole text rather than silently dropping gaps.
+    return [_block_from_item(document, item, text=item.text, label=label)]
+
+
+def _block_from_item(
+    document, item, *, text: str, label: str = "text", provenance=None
+) -> TextBlock:
     """Copy one Docling item's geometry into our deliberately small model."""
 
-    provenance = item.prov[0]
+    provenance = provenance or item.prov[0]
     page_size = document.pages[provenance.page_no].size
     return TextBlock(
         text=text,
@@ -211,11 +361,11 @@ def _table_blocks(document, table_mode: str) -> tuple[list[TextBlock], int, int]
             narrated += 1
         else:
             title = _table_title(table)
-            description = f"{table.data.num_rows} rows and {table.data.num_cols} columns"
-            text = (
-                f"Data table omitted from narration: {title}. It contains {description}. "
-                f"Review source PDF page {page_number} for the values."
-            )
+            # A generic first-column header sounds worse than no title; nearby captions remain.
+            if _is_generic_table_title(title):
+                text = f"Table omitted. See PDF page {page_number}."
+            else:
+                text = f"Table omitted: {title}. See PDF page {page_number}."
             omitted += 1
 
         blocks.append(_block_from_item(document, table, text=text, label="note"))
@@ -223,15 +373,49 @@ def _table_blocks(document, table_mode: str) -> tuple[list[TextBlock], int, int]
 
 
 def _is_text_table(table) -> bool:
-    """Small narrow tables usually contain prompts or lists rather than dense measurements."""
+    """Use cell contents, not just dimensions, to avoid speaking unlabeled number streams."""
 
-    return table.data.num_cols <= 4 and table.data.num_rows <= 25
+    if table.data.num_cols > 4 or table.data.num_rows > 25:
+        return False
+    if _is_conversion_table(table):
+        return True
+    rows = table.data.grid
+    # Multiple dated columns are comparisons, even when most other cells contain names.
+    if rows and sum(bool(re.search(r"\b(?:19|20)\d{2}\b", c.text)) for c in rows[0]) >= 2:
+        return False
+    cells = [
+        cell.text.strip()
+        for row in rows
+        for index, cell in enumerate(row)
+        if cell.text.strip()
+        and not re.fullmatch(r"_+", cell.text.strip())
+        # An ordinal first column does not make a list of prompts a data table.
+        and not (index == 0 and re.fullmatch(r"\d+[.)]?", cell.text.strip()))
+    ]
+    return bool(cells) and sum(bool(re.search(r"\d", c)) for c in cells) / len(cells) < 0.25
+
+
+def _is_conversion_table(table) -> bool:
+    rows = table.data.grid
+    # Two explicitly labeled unit columns remain useful when narrated as equivalences.
+    return (
+        bool(rows)
+        and table.data.num_cols == 2
+        and [c.text.strip().casefold() for c in rows[0]]
+        in (["measure", "equivalent"], ["unit", "equivalent"])
+    )
 
 
 def _linearize_table(table) -> str:
     """Turn rows into short spoken clauses while removing blank response fields."""
 
     rows: list[str] = []
+    if _is_conversion_table(table):
+        return "Table contents. " + " ".join(
+            f"{row[0].text.strip()} equals {row[1].text.strip()}."
+            for row in table.data.grid[1:]
+            if len(row) == 2
+        )
     for row in table.data.grid:
         cells: list[str] = []
         for cell in row:
@@ -257,21 +441,87 @@ def _table_title(table) -> str:
     return "untitled table"
 
 
-def _visual_blocks(document) -> tuple[list[TextBlock], int]:
-    """Mark substantial figures once per page instead of silently losing them."""
+def _is_generic_table_title(title: str) -> bool:
+    """Reject first cells that are clearly column labels rather than table titles."""
 
-    substantial_by_page: dict[int, list] = {}
-    for picture in document.pictures:
+    normalized = re.sub(r"[^a-z ]", "", title.casefold()).strip()
+    # Years and compact labels commonly occupy the first cell of captioned data tables.
+    if re.search(r"\d", title):
+        return True
+    return normalized in {
+        "age group",
+        "business model",
+        "company",
+        "country",
+        "measure",
+        "operating cost",
+        "package size",
+        "price segment",
+        "product group",
+        "rank",
+        "region",
+        "style",
+        "supplier",
+        "year",
+    }
+
+
+def _content_pictures(document) -> list:
+    """Find content diagrams while rejecting logos and small decorative marks."""
+
+    pictures = []
+    for picture in getattr(document, "pictures", ()):
         if not picture.prov:
             continue
         provenance = picture.prov[0]
         page_size = document.pages[provenance.page_no].size
-        area = (provenance.bbox.r - provenance.bbox.l) * (
-            provenance.bbox.t - provenance.bbox.b
-        )
-        # Small logos and decorative marks add no value to an audiobook.
-        if area < page_size.width * page_size.height * 0.08:
-            continue
+        width = provenance.bbox.r - provenance.bbox.l
+        height = provenance.bbox.t - provenance.bbox.b
+        area_ratio = width * height / (page_size.width * page_size.height)
+        # Width, height and body placement distinguish small diagrams from publisher logos.
+        if (
+            area_ratio >= 0.02
+            and width >= page_size.width * 0.18
+            and height >= page_size.height * 0.06
+            and provenance.bbox.b > page_size.height * 0.10
+            and provenance.bbox.t < page_size.height * 0.94
+        ):
+            pictures.append(picture)
+    return pictures
+
+
+def _strip_visual_labels(blocks: list[TextBlock], pictures: list) -> tuple[list[TextBlock], int]:
+    """Remove disconnected labels and arrow glyphs that sit inside omitted diagrams."""
+
+    output: list[TextBlock] = []
+    removed = 0
+    for block in blocks:
+        inside = False
+        for picture in pictures:
+            provenance = picture.prov[0]
+            center_x = block.center_x
+            center_y = (block.top + block.bottom) / 2
+            if (
+                block.page == provenance.page_no
+                and provenance.bbox.l <= center_x <= provenance.bbox.r
+                and provenance.bbox.b <= center_y <= provenance.bbox.t
+                and block.label not in {"caption", "section_header", "footnote"}
+            ):
+                inside = True
+                break
+        if inside:
+            removed += 1
+        else:
+            output.append(block)
+    return output, removed
+
+
+def _visual_blocks(document, pictures=None) -> tuple[list[TextBlock], int]:
+    """Mark meaningful figures once per page instead of silently losing them."""
+
+    substantial_by_page: dict[int, list] = {}
+    for picture in _content_pictures(document) if pictures is None else pictures:
+        provenance = picture.prov[0]
         substantial_by_page.setdefault(provenance.page_no, []).append(picture)
 
     blocks: list[TextBlock] = []
@@ -279,11 +529,7 @@ def _visual_blocks(document) -> tuple[list[TextBlock], int]:
         first = max(pictures, key=lambda picture: picture.prov[0].bbox.t)
         count = len(pictures)
         page_number = first.prov[0].page_no
-        noun = "figure" if count == 1 else "figures"
-        text = (
-            f"Visual exhibit notice. {count} substantial {noun} on this page cannot be "
-            f"reliably converted to speech. Review source PDF page {page_number} for layout "
-            "and relationships."
-        )
+        noun = "Figure" if count == 1 else "Figures"
+        text = f"{noun} omitted. See PDF page {page_number}."
         blocks.append(_block_from_item(document, first, text=text, label="note"))
     return blocks, sum(len(pictures) for pictures in substantial_by_page.values())

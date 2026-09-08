@@ -58,6 +58,30 @@ def test_cross_page_continuation_skips_running_continued_header() -> None:
     assert [item.text for item in main] == ["This idea is the same as feeling sympathy."]
 
 
+def test_cross_page_text_merges_across_an_intervening_footnote():
+    blocks = [
+        block("The company cannot pay more than the price of its", page=1),
+        block("i This note explains the assumption.", label="footnote", page=1),
+        block("products. The argument continues.", page=2),
+    ]
+    main, _ = order_for_narration(blocks)
+    assert [item.text for item in main] == [
+        "The company cannot pay more than the price of its products. The argument continues.",
+        "i This note explains the assumption.",
+    ]
+
+
+def test_list_item_continues_across_a_page():
+    blocks = [
+        block("Cost leadership helps Southwest Airlines and other", label="list_item", page=1),
+        block("carriers reduce turnaround time.", page=2),
+    ]
+    main, _ = order_for_narration(blocks)
+    assert [item.text for item in main] == [
+        "Cost leadership helps Southwest Airlines and other carriers reduce turnaround time."
+    ]
+
+
 def test_narrow_heading_without_sidebar_content_stays_in_main_flow() -> None:
     blocks = [
         block("TECHPULSE'S EMPLOYEES", label="section_header", top=610, bottom=590, right=220),

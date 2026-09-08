@@ -116,9 +116,11 @@ flowchart LR
         Auth[Check AWS session and refresh browser login]
         Safety[Visual-redaction safety scan]
         Docling[Docling extraction and optional OCR]
+        Evidence[Original PDF spacing and raised-marker evidence]
+        Margins[Remove front matter and margin text]
         Order[Reading-order repair]
-        Exhibits[Smart table and figure handling]
-        Citations[Filter citations and preserve explanatory notes]
+        Exhibits[Handle tables, figures, and diagram labels]
+        Citations[Filter citations and position explanatory notes]
         Clean[Narration cleanup]
         Text[narration.txt]
         Quality[Pre-Polly quality gate]
@@ -126,7 +128,7 @@ flowchart LR
         Download[Poll and download]
         MP3[Local MP3 parts]
 
-        PDF --> Wrapper --> CLI --> Auth --> Safety --> Docling --> Order --> Exhibits --> Citations --> Clean --> Text
+        PDF --> Wrapper --> CLI --> Auth --> Safety --> Docling --> Evidence --> Margins --> Exhibits --> Order --> Citations --> Clean --> Text
         Text --> Quality --> Split
         Download --> MP3
     end
@@ -161,16 +163,29 @@ The responsibilities are deliberately separated:
   the service region for Polly, S3, and STS.
 - `case2audio extract` runs entirely on the local machine. Docling reads the PDF, the reading-order
   layer repairs misplaced headings and moves real sidebars out of the main narrative, and the
-  cleanup layer removes page furniture, duplicate headings, and other material that sounds bad
-  when narrated.
+  cleanup layer removes administrative front matter, page furniture, duplicate headings, and
+  other material that sounds bad when narrated.
+- Before paragraphs are joined, margin text is filtered by position, repetition, and recognized
+  page labels. Cross-page Docling blocks are split using their character spans, so each piece
+  retains the correct page geometry. This prevents a footer from absorbing real case prose and
+  then taking that prose with it when the footer is removed.
+- A read-only PDFium pass checks original text spacing and raised citation markers. It repairs
+  word fragments only when the original objects have no intervening space and a letter-sized
+  gap. Citation removal requires a raised marker after punctuated prose, a matching local text
+  anchor, and either a matching footnote or a consistent numeric citation series in the document.
 - Before extraction, a local PDF safety scan replaces selectable text hidden under opaque black
   rectangles with `[redacted]` in the narration and every debug artifact.
-- After reading-order repair, the citation filter removes source lists and citation-only notes
-  from the narration stream, retaining explanations and leaving the raw extraction for reference.
-- Smart exhibit handling narrates compact text tables, clearly marks dense numeric tables and
-  substantial figures for visual review, and never silently drops them.
+- The citation filter removes source lists and citation-only notes while preserving methodology
+  or definitions that share a source line. Explanatory footnotes are moved directly after the
+  paragraph that references them, and raw extraction remains available for comparison.
+- Smart exhibit handling checks table contents as well as dimensions. Numeric comparison tables
+  receive short visual-review notices instead of long descriptions of omitted cells; narrow
+  inventory notes are skipped, while simple unit conversions remain spoken as equivalences.
+  Content figures—including small diagrams—receive short review notices, and loose labels inside
+  their bounds are removed so arrows and isolated words are not narrated as prose.
 - The cleaned result and extraction diagnostics are written under `generated/<pdf-name>/` before
-  any paid synthesis request is made. The quality report blocks known redaction or footer leaks.
+  any paid synthesis request is made. The quality report blocks known redaction leaks, footer
+  leaks, and unspeakable private-use glyphs left behind by PDF icon fonts.
 - `case2audio speak` splits reviewed narration at safe paragraph or sentence boundaries, validates
   the selected voice/engine in the configured region, and starts asynchronous Polly tasks.
 - Polly writes each completed MP3 to the private S3 bucket under `_tasks/`. The CLI polls the tasks,
@@ -199,17 +214,24 @@ This stays local and writes `generated/case.txt`. If a publisher's notice surviv
   --drop-regex '^confidential course copy$'
 ```
 
-The default `--table-mode smart` reads compact text-heavy tables but replaces dense numeric tables
-with a clear spoken notice to review the PDF. Large figures get the same treatment. Use
+The default `--table-mode smart` reads compact text-heavy tables but replaces numeric comparison
+tables (even small ones) with a clear spoken notice to review the PDF. Two-column unit conversion
+tables remain readable, e.g. “1 barrel equals 31 gallons.” Content figures get review notices. Use
 `--table-mode skip` to omit every table's cells while retaining notices, or `--table-mode linearize`
 to read every table row. The debug `quality-report.txt` records redactions, narrated tables, and
 intentional visual-review notices before anything is sent to Polly.
 
-Reference lists, bibliographies, endnote citations, citation-only footnotes, and exhibit source
-lines are excluded from narration by default. Definitions, caveats, and explanatory notes are
-kept; clearly marked explanations inside endnotes appear under `Explanatory notes`. Ambiguous
-footnotes are retained rather than risking removal of useful case content. Inline citation numbers
-that cannot be distinguished safely from real numbers may still appear.
+Reference lists, bibliographies, endnote citations, citation-only footnotes, and source-only
+exhibit text are excluded from narration by default. Definitions or methodology printed after a
+source attribution are kept. Definitions, caveats, and explanatory notes are kept; clearly marked
+explanations inside endnotes appear under `Explanatory notes`. Ordinary explanatory footnotes are
+placed immediately after their referring paragraph. Ambiguous footnotes are retained rather than
+risking removal of useful case content. Mixed notes lose
+recognized interview-attribution, quoted bibliography, permission-reminder, and manuscript-editing
+sentences while retaining actual qualifications. Confirmed raised inline citations are removed;
+ordinary values such as `Firm 1`, `20%`, years, and exhibit numbers are preserved. Unconfirmed
+markers may remain and trigger a review warning. Scanned PDFs without usable text geometry do
+not receive these source-confirmed repairs.
 
 Raw Docling Markdown/JSON retain the sources for review. The quality report records omitted
 citation blocks and retained notes. Citation filtering always applies during PDF extraction.
@@ -220,6 +242,17 @@ Cleanup removes notice sentences rather than whole sections, because PDF extract
 the next real paragraph into a notice. Ordinary discussion of copyright and licensing is kept;
 unfamiliar publisher wording may still need a targeted rule. Raw extraction retains the notices.
 These rules affect future narration only; existing MP3s are not modified.
+
+Word cleanup also repairs a small, explicit set of known splits and joined compounds such as
+`inflationadjusted` → `inflation-adjusted`. It does not run general spellcheck or an AI rewrite.
+Small, audited source errors are repaired only when the intended spoken form is unambiguous;
+other suspected damaged names are flagged rather than guessed. The quality report counts removed
+front matter, margin blocks, diagram labels, inline citations, and source-confirmed word repairs,
+and warns about recognizable leftover citation/word artifacts.
+One-sided PDF hyphen spacing is repaired, year ranges use the spoken word `to`, and a tiny set of
+well-known symbols such as `I ♥ NY` is expanded only when its spoken form is unambiguous.
+`PASS WITH WARNINGS` is not a guarantee of perfect extraction: inspect the reported examples
+before paying for audio.
 
 Results appear under `generated/your-case/`:
 
@@ -274,13 +307,19 @@ in `us-east-2`.
 ## Development
 
 ```bash
-source .venv/bin/activate
-pytest
-ruff check .
+.venv/bin/python -m pytest
+.venv/bin/ruff check .
 ```
 
-After changing package code locally, rerun `python -m pip install --no-deps .` before testing the
-installed `case2audio` command.
+Tests load the working-tree code directly. After changing package code locally, rerun
+`.venv/bin/python -m pip install --no-deps .` before testing the installed `case2audio` command
+or `./make-audio`.
+
+Regression tests cover footer/paragraph boundaries, multi-page character spans, real numbers
+versus raised citations, source-confirmed word joins, mixed explanatory notes, and numeric
+table classification. For an end-to-end check, run `case2audio extract` on a local PDF and
+review `narration.txt` plus the debug quality report; this never calls AWS. Keep licensed
+PDFs and generated outputs out of test fixtures and Git.
 
 CI runs the fast unit tests and lint checks without downloading Docling models or calling AWS.
 The AWS test uses fakes, so pull requests cannot create paid synthesis tasks.

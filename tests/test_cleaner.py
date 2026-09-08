@@ -60,12 +60,19 @@ def test_drop_cap_fix_does_not_join_normal_heading_words() -> None:
     markdown = """W HEN the case starts, listen closely.
 
 # ARE YOU A PERSPECTIVE TAKER?
+
+# A TAXONOMY OF STRATEGIES
+
+# A FRAGMENTING MARKET
 """
 
     result = clean_markdown(markdown)
 
     assert "WHEN the case" in result
     assert "ARE YOU A PERSPECTIVE TAKER?" in result
+    assert "A TAXONOMY OF STRATEGIES" in result
+    assert "A FRAGMENTING MARKET" in result
+    assert "ATAXONOMY" not in result
 
 
 def test_contact_email_is_removed_without_joining_the_next_section() -> None:
@@ -120,3 +127,36 @@ An up-and-comer considered the underlying-and often benevolent-intentions.
     assert "up-and-comer" in result
     assert "underlying - and often benevolent-intentions" in result
     assert "\n\nHave you made progress?" in result
+
+
+def test_repairs_known_splits_and_compounds_without_general_word_joining():
+    text = clean_markdown(
+        "We wou ld expa nd onethird of our front-ofhouse space. "
+        "Figures are inflationadjusted; offpremise sales use Valuebased pricing. "
+        "Standard and P oor's. They walked in to see us. Firm 1 earned 20% in 2024."
+    )
+    assert "would expand one-third of our front-of-house" in text
+    assert "inflation-adjusted" in text
+    assert "off-premise" in text
+    assert "Value-based" in text
+    assert "Standard and Poor's" in text
+    assert "in to see us. Firm 1 earned 20% in 2024." in text
+
+
+def test_audio_punctuation_and_unambiguous_source_typos_are_repaired():
+    text = clean_markdown(
+        "Nvidia VIDIA said Apple 's customers ' WTP uses a socalled no - name model . "
+        "Profit is price mins cost, and the latestgeneration GPU s out competes rivals. "
+        "It was second -largest from 2013 - 2023, beside the I ♥ NY logo."
+    )
+    assert text == (
+        "Nvidia said Apple's customers' WTP uses a so-called no-name model. "
+        "Profit is price minus cost, and the latest-generation GPUs outcompetes rivals. "
+        "It was second-largest from 2013 to 2023, beside the I Love New York logo.\n"
+    )
+
+
+def test_cover_ids_and_publication_dates_are_not_narrated():
+    assert clean_markdown("ID#080407\n\nPUBLISHED ON AUGUST 29, 2024\n\nUseful title") == (
+        "Useful title\n"
+    )

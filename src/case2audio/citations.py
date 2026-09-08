@@ -41,14 +41,48 @@ def _explanation_tail(text: str) -> str | None:
     # Publishers often append important qualifications after an otherwise disposable citation.
     match = re.search(r"\bNotes?(?: on [^:]{1,60})?\s*:\s*(.+)", text, re.I | re.S)
     if match:
-        return match.group(1).strip()
+        return _clean_explanation(match.group(1).strip())
     # Keep a clearly explanatory sentence even if the citation omitted an explicit 'Note:' label.
     match = re.search(
         r"[.!?]\s+((?:This|These|In this|For example|Because|However|We|Our|Figures)\b.+)",
         text,
         re.S,
     )
-    return match.group(1).strip() if match else None
+    return _clean_explanation(match.group(1).strip()) if match else None
+
+
+def _source_explanation(text: str, source_end: int) -> str | None:
+    """Keep methodology after an inline source while dropping the attribution sentence."""
+
+    remainder = text[source_end:].strip()
+    # The first sentence names the source; later prose often defines a metric or limitation.
+    match = re.search(r"[.!?]\s+(.+)", remainder, re.S)
+    if not match:
+        return None
+    explanation = _clean_explanation(match.group(1).strip())
+    return explanation or None
+
+
+def _clean_explanation(text: str) -> str:
+    """Trim source/editorial sentences only inside already identified notes."""
+    sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", text)
+    retained = []
+    for sentence in sentences:
+        # These describe provenance or manuscript preparation, not the case's argument.
+        if re.match(
+            r"^(?:This statement, and all others by .+ are from an interview\b|"
+            r"Used with attribution as required by\b|"
+            r"The previous draft['’]s statement\b)",
+            sentence,
+            re.I,
+        ):
+            continue
+        # A date alone is not a citation: require a quoted title plus source-like structure.
+        quoted_title = re.search(r'[,;]\s*["“].+?["”]', sentence)
+        if quoted_title and _YEAR.search(sentence) and _citation_only(sentence):
+            continue
+        retained.append(sentence)
+    return " ".join(retained).strip()
 
 
 def _citation_only(text: str) -> bool:
@@ -107,13 +141,15 @@ def filter_citation_blocks(blocks: list[TextBlock]) -> CitationResult:
             if explanation is None and block.label == "footnote":
                 candidate = _without_marker(text)
                 if _EXPLANATION.match(candidate) and not _citation_only(candidate):
-                    explanation = candidate
+                    explanation = _clean_explanation(candidate)
             if explanation:
                 if not explanation_header_added and reference_header is not None:
                     output.append(replace(reference_header, text="Explanatory notes"))
                     explanation_header_added = True
-                output.append(replace(block, text=explanation, label="text"))
-                explanations += 1
+                # Identical retained tails can come from separate adjacent bibliography entries.
+                if not output or output[-1].text != explanation:
+                    output.append(replace(block, text=explanation, label="text"))
+                    explanations += 1
             omitted += 1
             continue
 
@@ -122,7 +158,7 @@ def filter_citation_blocks(blocks: list[TextBlock]) -> CitationResult:
             # A source label and its URL are sometimes separate Docling blocks.
             source_continuation = True
             source_needs_entry = not text[source.end() :].strip() or text.endswith(",")
-            explanation = _explanation_tail(text)
+            explanation = _explanation_tail(text) or _source_explanation(text, source.end())
             if explanation:
                 output.append(replace(block, text=explanation, label="text"))
                 explanations += 1
@@ -148,8 +184,13 @@ def filter_citation_blocks(blocks: list[TextBlock]) -> CitationResult:
                 omitted += 1
                 continue
             # Retain definitions and caveats, without speaking their detached footnote markers.
-            output.append(replace(block, text=_without_marker(text)))
-            explanations += 1
+            cleaned = _clean_explanation(_without_marker(text))
+            if cleaned:
+                # Make a detached footnote intelligible when it follows its referring paragraph.
+                output.append(replace(block, text=f"Explanatory note: {cleaned}", label="text"))
+                explanations += 1
+            else:
+                omitted += 1
             continue
         output.append(block)
     return CitationResult(output, omitted, explanations)

@@ -12,7 +12,6 @@ from .word_repairs import repair_words
 # These are intentionally narrow: deleting real case prose is worse than leaving minor noise.
 DEFAULT_DROP_PATTERNS = (
     r"^id\s*#\s*\S+\s*$",
-    r"^published on\s+.+$",
     r"^this document is authorized for use only by\b.*$",
     r"^article reprint no\.\s*\S+\s*$",
     r"^a newsletter from .* publishing\b.*$",
@@ -162,10 +161,17 @@ def clean_markdown(markdown: str, options: CleanerOptions | None = None) -> str:
     text = re.sub(r"(?m)^([A-Z])\s+([A-Z]{2,})(?=\s+[a-z])", r"\1\2", text)
     # PDF typography often leaves spaces around apostrophes and terminal punctuation.
     text = re.sub(r"\b([A-Za-z]+)\s+(['’]s)\b", r"\1\2", text)
+    # Italic contractions often split after the apostrophe, including possessives.
+    text = re.sub(r"\b([A-Za-z]+)[ \t]*(['’])[ \t]+(s|t|ve|re|ll|d|m)\b", r"\1\2\3", text)
     text = re.sub(r"\b([A-Za-z]+)\s+(['’])(?=\s|[,.])", r"\1\2", text)
     text = re.sub(r"\s+([,.])", r"\1", text)
     text = re.sub(r"\(\s+", "(", text)
     text = re.sub(r"\s+\)", ")", text)
+    # A cheer can split its emphasized letter and exclamation into separate Docling blocks.
+    text = re.sub(r"\b(Give me an?)\s+([A-Z])\s*!", r"\1 \2!", text)
+    text = re.sub(r"[ \t]+([!;])", r"\1", text)
+    # Affiliation markers are useful on the cover but have no spoken meaning in a byline.
+    text = re.sub(r"(?m)^(BY[^\n]+)$", lambda m: re.sub(r"\s*[*†‡]+", "", m[0]), text)
     # Older PDFs can lose a dash at an italic boundary around this common phrase.
     text = re.sub(r"\bquestions(?=what, how, and why\b)", "questions - ", text, flags=re.I)
     # Contact details add little to an audiobook but often contain awkward punctuation.

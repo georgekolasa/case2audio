@@ -64,3 +64,10 @@ def test_quality_gate_blocks_private_use_pdf_glyphs() -> None:
     )
 
     assert {finding.code for finding in report.blocking} == {"UNSPOKEN_GLYPHS"}
+
+
+def test_damaged_sentence_is_flagged_without_inventing_a_repair():
+    report = assess_narration(
+        "Stores grew quickly; s (see Exhibit 5).", signals=ExtractionSignals()
+    )
+    assert "DAMAGED_SENTENCE" in report.render()

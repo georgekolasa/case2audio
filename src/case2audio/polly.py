@@ -180,7 +180,12 @@ def synthesize_to_directory(
             raise Case2AudioError(f"Polly rejected part {index}: {exc}") from exc
 
         task_id = response["SynthesisTask"]["TaskId"]
-        _print_progress(f"Polly is processing part {index}/{len(chunks)} (task {task_id}).", label)
+        # Count the submitted part so split PDFs report the work for this specific task.
+        _print_progress(
+            f"Polly is processing part {index}/{len(chunks)} "
+            f"({len(chunk):,} characters; task {task_id}).",
+            label,
+        )
         task = _wait_for_task(
             polly,
             task_id,
@@ -237,7 +242,7 @@ def named_audio_key(options: PollyOptions, label: str | None, index: int, total:
 def _print_progress(message: str, label: str | None = None) -> None:
     """Show local start times and PDF names so overlapping jobs can be followed."""
 
-    stamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    stamp = datetime.now().astimezone().strftime("%H:%M:%S %Z")
     document = f" [{label}]" if label else ""
     # One write keeps worker messages together when several tasks report at once.
     sys.stdout.write(f"[{stamp}]{document} {message}\n")

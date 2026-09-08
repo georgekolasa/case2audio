@@ -115,13 +115,20 @@ def test_pdf_scanner_handles_separate_periods_spaces_and_releases_pages(monkeypa
         ("in", (50, 560, 100, 572)),
         (" ", (100, 560, 101, 572)),
         ("to", (101, 560, 111, 572)),
+        ("The quoted thought", (50, 540, 200, 552)),
+        (". . . ", (201, 540, 210, 542)),
+        ("”", (211, 548, 215, 552)),
+        ("28", (216, 546, 222, 551)),
     ]
     objects = [
         SimpleNamespace(type=raw.FPDF_PAGEOBJ_TEXT, extract=lambda t=t: t, get_bounds=lambda b=b: b)
         for t, b in specs
     ]
     page = SimpleNamespace(
-        get_textpage=lambda: SimpleNamespace(close=lambda: closed.append("text")),
+        get_textpage=lambda: SimpleNamespace(
+            get_text_range=lambda: "The claim.1 expand in to",
+            close=lambda: closed.append("text"),
+        ),
         get_objects=lambda **_: iter(objects),
         close=lambda: closed.append("page"),
     )
@@ -141,7 +148,13 @@ def test_pdf_scanner_handles_separate_periods_spaces_and_releases_pages(monkeypa
 
     monkeypatch.setattr(pdfium, "PdfDocument", lambda _: Document())
     evidence = scan_pdf_text_evidence(tmp_path / "synthetic.pdf")
-    assert [r.marker for r in evidence.references] == ["1"]
+    assert [r.marker for r in evidence.references] == ["1", "28"]
     assert evidence.references[0].anchor == "The claim."
     assert [(j.left_word, j.right_word) for j in evidence.word_joins] == [("expa", "nd")]
     assert closed == ["text", "page", "document"]
+
+
+def test_year_citation_is_not_confused_with_an_exponent():
+    marker = ("2", (401, 606, 404, 611))
+    assert raised_reference(("profitable by 2026", (50, 600, 400, 612)), marker) == "2"
+    assert raised_reference(("x", (50, 600, 400, 612)), marker) is None

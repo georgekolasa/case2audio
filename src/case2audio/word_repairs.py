@@ -21,6 +21,10 @@ SPLIT_WORDS = {
     "GPU s": "GPUs",
     "price mins": "price minus",
     "out competes": "outcompetes",
+    "merch andise": "merchandise",
+    "w e": "we",
+    "t o": "to",
+    "o f": "of",
 }
 
 _COMPOUNDS = re.compile(

@@ -31,11 +31,12 @@ When a failure is detected, new jobs stop; already running jobs finish and downl
 The command reports the failures and exits nonzero. Rerun only unfinished PDFs to avoid paying
 for completed audio again.
 
-Polly messages include local timestamps and PDF names, for example:
+Polly messages include local time, timezone, and PDF names. Processing messages also show the
+number of characters submitted for that part, for example:
 
 ```text
-[2026-09-07 16:15:03 EDT] [bb.pdf] Polly is processing part 1/1 (task ...).
-[2026-09-07 16:15:25 EDT] [sfn.pdf] Polly is processing part 1/1 (task ...).
+[16:15:03 EDT] [bb.pdf] Polly is processing part 1/1 (45,784 characters; task ...).
+[16:15:25 EDT] [sfn.pdf] Polly is processing part 1/1 (52,536 characters; task ...).
 ```
 
 That's the normal command. No virtualenv activation or AWS flags needed. Defaults: Matthew,
@@ -116,7 +117,7 @@ flowchart LR
         Auth[Check AWS session and refresh browser login]
         Safety[Visual-redaction safety scan]
         Docling[Docling extraction and optional OCR]
-        Evidence[Original PDF spacing and raised-marker evidence]
+        Evidence[Original PDF spacing, punctuation, and raised markers]
         Margins[Remove front matter and margin text]
         Order[Reading-order repair]
         Exhibits[Handle tables, figures, and diagram labels]
@@ -168,16 +169,22 @@ The responsibilities are deliberately separated:
 - Before paragraphs are joined, margin text is filtered by position, repetition, and recognized
   page labels. Cross-page Docling blocks are split using their character spans, so each piece
   retains the correct page geometry. This prevents a footer from absorbing real case prose and
-  then taking that prose with it when the footer is removed.
+  then taking that prose with it when the footer is removed. Cover metadata and publishing
+  notices are also removed before joining; a publication date cannot absorb the next paragraph.
+  The same margin checks apply when Docling misclassifies a footer as a table.
 - A read-only PDFium pass checks original text spacing and raised citation markers. It repairs
   word fragments only when the original objects have no intervening space and a letter-sized
-  gap. Citation removal requires a raised marker after punctuated prose, a matching local text
-  anchor, and either a matching footnote or a consistent numeric citation series in the document.
+  gap. Missing compound hyphens and prose dashes are recovered from the original page text,
+  with ambiguous matches left alone. Citation removal requires a raised marker after punctuated
+  prose or a year, a matching local text anchor, and either a matching footnote or a consistent
+  numeric citation series. Spaced ellipses and separate closing-quote objects are supported.
 - Before extraction, a local PDF safety scan replaces selectable text hidden under opaque black
   rectangles with `[redacted]` in the narration and every debug artifact.
 - The citation filter removes source lists and citation-only notes while preserving methodology
   or definitions that share a source line. Explanatory footnotes are moved directly after the
-  paragraph that references them, and raw extraction remains available for comparison.
+  paragraph that references them. Author initials and publisher abbreviations do not create
+  fake explanations, and an ordinary sentence with a comma and year is not treated as a citation.
+  Raw extraction remains available for comparison.
 - Smart exhibit handling checks table contents as well as dimensions. Numeric comparison tables
   receive short visual-review notices instead of long descriptions of omitted cells; narrow
   inventory notes are skipped, while simple unit conversions remain spoken as equivalences.
@@ -251,6 +258,8 @@ front matter, margin blocks, diagram labels, inline citations, and source-confir
 and warns about recognizable leftover citation/word artifacts.
 One-sided PDF hyphen spacing is repaired, year ranges use the spoken word `to`, and a tiny set of
 well-known symbols such as `I ♥ NY` is expanded only when its spoken form is unambiguous.
+Contraction spacing and fragmented cheer letters are repaired. Obvious sentence fragments such
+as `; s (see Exhibit 5)` trigger `DAMAGED_SENTENCE`; missing source text is never invented.
 `PASS WITH WARNINGS` is not a guarantee of perfect extraction: inspect the reported examples
 before paying for audio.
 
@@ -320,6 +329,22 @@ versus raised citations, source-confirmed word joins, mixed explanatory notes, a
 table classification. For an end-to-end check, run `case2audio extract` on a local PDF and
 review `narration.txt` plus the debug quality report; this never calls AWS. Keep licensed
 PDFs and generated outputs out of test fixtures and Git.
+
+The optional real-case checks cover Walmart, bb, and sfn. Generate fresh local outputs, then
+point the checks at their parent directory:
+
+```bash
+for case_name in Walmart bb sfn; do
+  PYTHONPATH=src .venv/bin/case2audio extract "$HOME/Downloads/$case_name.pdf" --no-ocr \
+    --output "generated/regression/$case_name/narration.txt" \
+    --debug-dir "generated/regression/$case_name/debug" || break
+done
+CASE2AUDIO_REGRESSION_DIR=generated/regression .venv/bin/python -m pytest tests/test_real_pdf_regressions.py
+```
+
+These checks catch missing introductory prose and explanatory footnotes, false table notices,
+leaked citations, damaged words, and broken figure handling. They are skipped unless that
+environment variable is set; CI still works without personal PDFs.
 
 CI runs the fast unit tests and lint checks without downloading Docling models or calling AWS.
 The AWS test uses fakes, so pull requests cannot create paid synthesis tasks.

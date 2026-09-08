@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
+from case2audio.cleaner import clean_markdown
 from case2audio.extractor import (
+    _build_narration_markdown,
     _content_pictures,
     _is_generic_table_title,
     _is_text_table,
@@ -9,6 +11,7 @@ from case2audio.extractor import (
     _strip_front_matter,
     _strip_low_value_table_notes,
     _strip_visual_labels,
+    _table_blocks,
     _table_title,
     _text_blocks_from_item,
     _visual_blocks,
@@ -121,6 +124,51 @@ def test_front_matter_stops_at_the_next_page_without_a_heading():
     kept, removed = _strip_front_matter(blocks)
     assert [block.text for block in kept] == ["Real opening prose."]
     assert removed == 4
+
+
+def test_cover_metadata_cannot_swallow_page_two_intro():
+    def item(text, page, top=600, label="text"):
+        return SimpleNamespace(
+            text=text,
+            content_layer="body",
+            label=SimpleNamespace(value=label),
+            prov=[
+                SimpleNamespace(page_no=page, bbox=SimpleNamespace(l=50, r=550, t=top, b=top - 30))
+            ],
+        )
+
+    document = SimpleNamespace(
+        texts=[
+            item("The warning was that too many projects spread the organization's", 1),
+            item("PUBLISHED ON AUGUST 27, 2024", 1, top=300),
+            item("resources too thin. Were the new brands compatible?", 2),
+            item("Humble Beginnings", 2, top=500, label="section_header"),
+        ],
+        pages={n: SimpleNamespace(size=SimpleNamespace(width=612, height=792)) for n in (1, 2)},
+        tables=[],
+        pictures=[],
+    )
+    md, _ = _build_narration_markdown(document, "body", "smart")
+    text = clean_markdown(md)
+    assert "organization's resources too thin. Were the new brands compatible?" in text
+    assert "PUBLISHED" not in text
+
+
+def test_table_footer_is_dropped_but_body_table_is_kept():
+    document = SimpleNamespace(
+        pages={1: SimpleNamespace(size=SimpleNamespace(width=612, height=792))}
+    )
+    footer = _table([["Case title | Page 1"], ["BY ALICE AND BOB"]])
+    body = _table([["Year", "2024", "2025"], ["Sales", "10", "20"]])
+    for table, top in [(footer, 70), (body, 500)]:
+        table.prov = [
+            SimpleNamespace(page_no=1, bbox=SimpleNamespace(l=50, r=550, t=top, b=top - 20))
+        ]
+    document.tables = [footer, body]
+    blocks, narrated, omitted = _table_blocks(document, "smart")
+    assert len(blocks) == 1
+    assert (narrated, omitted) == (0, 1)
+    assert blocks[0].top == 500
 
 
 def test_only_inventory_style_table_notes_are_removed():

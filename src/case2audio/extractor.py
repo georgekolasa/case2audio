@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from .boilerplate import strip_publishing_boilerplate
 from .citations import filter_citation_blocks
 from .cleaner import CleanerOptions, clean_markdown
 from .errors import Case2AudioError
@@ -21,6 +22,7 @@ from .inline_refs import (
 from .pdf_safety import scan_visual_redactions, scrub_hidden_text, scrub_hidden_values
 from .quality import ExtractionSignals, QualityReport, assess_narration
 from .reading_order import TextBlock, order_for_narration, render_markdown
+from .source_forms import repair_source_forms
 
 
 @dataclass(frozen=True)
@@ -94,6 +96,7 @@ def extract_pdf(
         table_mode,
         references=evidence.references,
         word_joins=evidence.word_joins,
+        source_forms=evidence.source_forms,
     )
 
     # Never persist selectable text that the rendered PDF deliberately covers.
@@ -155,6 +158,7 @@ def _build_narration_markdown(
     *,
     references=(),
     word_joins=(),
+    source_forms=(),
 ) -> tuple[str, ExtractionSignals]:
     """Map Docling items into the small geometry model used by reading-order policy."""
 
@@ -169,6 +173,12 @@ def _build_narration_markdown(
     # Remove furniture while page geometry is still intact, before continuation merging.
     blocks, removed_furniture = strip_margin_furniture(blocks)
     blocks, removed_front_matter = _strip_front_matter(blocks)
+    # A cover notice must not become the unfinished paragraph that absorbs page-two text.
+    blocks = [
+        replace(block, text=cleaned)
+        for block in blocks
+        if (cleaned := strip_publishing_boilerplate(block.text)).strip()
+    ]
     blocks, omitted_table_notes = _strip_low_value_table_notes(blocks)
     known_markers = {
         match.group(1)
@@ -177,15 +187,17 @@ def _build_narration_markdown(
         if (match := re.match(r"^\s*(\d{1,3}|[ivxlcdm]{1,4})[.)]?\s+", block.text))
     }
     known_markers.update(reference_sequence_markers(references))
-    removed_markers = repaired_words = 0
+    removed_markers = repaired_words = repaired_forms = 0
     for index, block in enumerate(blocks):
         if block.label not in {"text", "list_item", "caption"}:
             continue
         text, count = strip_inline_references(block, references, known_markers)
         repaired, word_count = repair_source_word_joins(replace(block, text=text), word_joins)
+        repaired, form_count = repair_source_forms(replace(block, text=repaired), source_forms)
         blocks[index] = replace(block, text=repaired)
         removed_markers += count
         repaired_words += word_count
+        repaired_forms += form_count
 
     pictures = _content_pictures(document)
     blocks, removed_visual_labels = _strip_visual_labels(blocks, pictures)
@@ -213,6 +225,7 @@ def _build_narration_markdown(
         removed_margin_blocks=removed_furniture,
         removed_inline_markers=removed_markers,
         repaired_source_words=repaired_words,
+        repaired_source_forms=repaired_forms,
         removed_front_matter_blocks=removed_front_matter,
         omitted_table_notes=omitted_table_notes,
         removed_visual_labels=removed_visual_labels,
@@ -353,6 +366,12 @@ def _table_blocks(document, table_mode: str) -> tuple[list[TextBlock], int, int]
     omitted = 0
     for table in document.tables:
         if not table.prov:
+            continue
+        # Docling sometimes builds a table from the running title and author byline.
+        # Reuse the margin policy so real tables in the page body keep their notices.
+        table_text = " ".join(cell.text for row in table.data.grid for cell in row)
+        table_block = _block_from_item(document, table, text=table_text)
+        if not strip_margin_furniture([table_block])[0]:
             continue
         page_number = table.prov[0].page_no
 

@@ -39,6 +39,15 @@ def strip_publishing_boilerplate(markdown: str) -> str:
         original = paragraph
         flat = re.sub(r"\s+", " ", paragraph).strip()
         normalized = flat
+        # Remove cover metadata before paragraph joining can attach the next page's prose.
+        if re.fullmatch(r"ID\s*#\s*\S+", flat, re.I):
+            continue
+        flat = re.sub(
+            r"^PUBLISHED ON\s+(?:[A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})\b\s*",
+            "",
+            flat,
+            flags=re.I,
+        )
         if _HEADING.fullmatch(flat):
             continue
         if _COPYRIGHT_START.match(flat):

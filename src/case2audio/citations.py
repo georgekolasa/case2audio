@@ -55,12 +55,16 @@ def _source_explanation(text: str, source_end: int) -> str | None:
     """Keep methodology after an inline source while dropping the attribution sentence."""
 
     remainder = text[source_end:].strip()
-    # The first sentence names the source; later prose often defines a metric or limitation.
-    match = re.search(r"[.!?]\s+(.+)", remainder, re.S)
-    if not match:
-        return None
-    explanation = _clean_explanation(match.group(1).strip())
-    return explanation or None
+    # Initials and abbreviations are not sentence boundaries: demand actual methodology prose.
+    for match in re.finditer(r"[.!?]\s+(?=(.+))", remainder):
+        tail = match.group(1)
+        if re.match(
+            r"(?:[A-Z]{2,8}\s+(?:is|are|was|were)\b|"
+            r"(?:The\s+(?:sample|analysis|data|figures)|Figures|Values|Amounts)\b)",
+            tail,
+        ):
+            return _clean_explanation(tail) or None
+    return None
 
 
 def _clean_explanation(text: str) -> str:
@@ -95,7 +99,14 @@ def _citation_only(text: str) -> bool:
     if _URL.search(text) or re.search(r"\bdoi\s*:", text, re.I):
         return True
     # Named authors/publishers followed by a title and year or page number are citation-shaped.
-    author = re.match(r"^[A-Z][^.!?\n]{1,100},", text)
+    author = re.match(r"^([^,\n]{1,100}),", text)
+    # A capitalized sentence plus a comma and year is not evidence of a bibliography entry.
+    # Names/publishers use capitalized words, initials, and a few ordinary name connectors.
+    if author:
+        words = re.findall(r"[\w’'-]+", author[1])
+        author = bool(words) and all(
+            word[0].isupper() or word in {"and", "of", "the", "de", "van", "von"} for word in words
+        )
     recommendation = re.match(r"^(?:see|for (?:a|an|more|further))\b", text, re.I)
     return bool(
         (author or recommendation)
@@ -106,6 +117,7 @@ def _citation_only(text: str) -> bool:
 def filter_citation_blocks(blocks: list[TextBlock]) -> CitationResult:
     """Filter an ordered narrative stream; bibliography scope ends at the next section."""
 
+    blocks = _join_source_labels(blocks)
     output: list[TextBlock] = []
     omitted = explanations = 0
     reference_section = False
@@ -194,3 +206,44 @@ def filter_citation_blocks(blocks: list[TextBlock]) -> CitationResult:
             continue
         output.append(block)
     return CitationResult(output, omitted, explanations)
+
+
+def _join_source_labels(blocks: list[TextBlock]) -> list[TextBlock]:
+    """Keep a split Source label and its entry together before source classification."""
+
+    result: list[TextBlock] = []
+    index = 0
+    while index < len(blocks):
+        block = blocks[index]
+        if re.fullmatch(r"sources?\s*:?", block.text.strip(), re.I):
+            block = replace(block, text="Source:")
+            if index + 1 < len(blocks):
+                following = blocks[index + 1]
+                # The colon provides strong evidence even for undated company documents.
+                if (
+                    following.page == block.page
+                    and following.label == "text"
+                    and (following.text.lstrip().startswith(":") or _citation_only(following.text))
+                ):
+                    block = replace(block, text="Source: " + following.text.lstrip(" :"))
+                    index += 1
+        # One source line can have several same-page character spans, split at a font change.
+        # Physical adjacency distinguishes the remaining publisher name from new body prose.
+        while _SOURCE.match(block.text) and index + 1 < len(blocks):
+            following = blocks[index + 1]
+            if not (
+                following.page == block.page
+                and following.label == "text"
+                and abs(following.top - block.top) <= 3
+                and -2 <= following.left - block.right <= 24
+            ):
+                break
+            block = replace(
+                block,
+                text=block.text.rstrip() + " " + following.text.lstrip(),
+                right=max(block.right, following.right),
+            )
+            index += 1
+        result.append(block)
+        index += 1
+    return result

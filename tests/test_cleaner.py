@@ -160,3 +160,19 @@ def test_cover_ids_and_publication_dates_are_not_narrated():
     assert clean_markdown("ID#080407\n\nPUBLISHED ON AUGUST 29, 2024\n\nUseful title") == (
         "Useful title\n"
     )
+
+
+def test_publication_date_does_not_consume_adjacent_case_prose():
+    text = clean_markdown("PUBLISHED ON AUGUST 27, 2024 resources were spread too thin.")
+    assert text == "resources were spread too thin.\n"
+
+
+def test_cheer_and_contractions_keep_their_spoken_words():
+    text = clean_markdown(
+        "BY ALICE * AND BOB †\n\nGive me an\n\nL\n\n!\n\n"
+        "I ' ve said we' ve paid; don ' t break the retailer' s promise."
+    )
+    assert text == (
+        "BY ALICE AND BOB\n\nGive me an L!\n\n"
+        "I've said we've paid; don't break the retailer's promise.\n"
+    )

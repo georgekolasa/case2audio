@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .source_forms import SourceForm, punctuation_forms
+
 
 @dataclass(frozen=True)
 class RaisedReference:
@@ -29,6 +31,7 @@ class WordJoin:
 class PdfTextEvidence:
     references: tuple[RaisedReference, ...]
     word_joins: tuple[WordJoin, ...]
+    source_forms: tuple[SourceForm, ...] = ()
 
 
 def normalize_quotes(text: str) -> str:
@@ -44,7 +47,7 @@ def raised_reference(previous, current) -> str | None:
     if not re.fullmatch(r"\d{1,3}|[ivxlcdm]{1,4}", token):
         return None
     # Exponents after variables/units and numbered entities are not reference markers.
-    if not re.search(r"[.!?,;:%][\"'’”)]*\s*$", before):
+    if not re.search(r"(?:[.!?,;:%][\"'’”)\s]*|\b(?:19|20)\d{2})\s*$", before):
         return None
     height = pt - pb
     if not (height > 0 and 0 < top - bottom < height * 0.8):
@@ -75,11 +78,13 @@ def scan_pdf_text_evidence(path: Path) -> PdfTextEvidence:
 
     found = []
     joins = []
+    forms = []
     with pdfium.PdfDocument(path) as pdf:
         for page_no in range(len(pdf)):
             page = pdf[page_no]
             text_page = page.get_textpage()
             try:
+                forms.extend(punctuation_forms(text_page.get_text_range(), page_no + 1))
                 previous = None
                 prose = None
                 for obj in page.get_objects(textpage=text_page):
@@ -110,7 +115,7 @@ def scan_pdf_text_evidence(path: Path) -> PdfTextEvidence:
                     # Use the preceding prose's height, not the height of that dot.
                     if (
                         prose
-                        and re.fullmatch(r"[.!?,;:'\"’”)]+", text.strip())
+                        and re.fullmatch(r"[.!?,;:'\"’”)\s]+", text.strip())
                         and -1 <= current[1][0] - prose[1][2] <= 8
                         and prose[1][1] - 1 <= current[1][1] <= prose[1][3]
                     ):
@@ -123,7 +128,7 @@ def scan_pdf_text_evidence(path: Path) -> PdfTextEvidence:
             finally:
                 text_page.close()
                 page.close()
-    return PdfTextEvidence(tuple(found), tuple(joins))
+    return PdfTextEvidence(tuple(found), tuple(joins), tuple(forms))
 
 
 def reference_sequence_markers(references) -> set[str]:

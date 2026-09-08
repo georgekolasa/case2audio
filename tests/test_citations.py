@@ -1,3 +1,4 @@
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -209,3 +210,52 @@ def test_dated_explanations_and_quotes_are_not_deleted():
     text = 'The company reported "record sales" in 2024, despite higher costs.'
     result = filter_citation_blocks([block("1 " + text, "footnote")])
     assert result.blocks[0].text == f"Explanatory note: {text}"
+
+
+def test_compensation_explanation_with_comma_and_year_survives():
+    text = (
+        "Retailers controlled both pay and working hours, making annual pay comparable. "
+        "In 2024, hourly pay stood at $18 for one retailer and $26 for another."
+    )
+    result = filter_citation_blocks([block("ii " + text, "footnote")])
+    assert [b.text for b in result.blocks] == ["Explanatory note: " + text]
+
+
+def test_source_initials_and_abbreviations_are_not_explanations():
+    sources = [
+        "Source: Thomas J. Holmes, 'A Study,' Journal 79 (2011): 253-302.",
+        "Source: Pankaj Ghemawat, Stephen P. Bradley, and Ken Mark, A Book (2003).",
+        "Source: Walmart Stores, Inc. Annual Report.",
+    ]
+    assert filter_citation_blocks([block(t) for t in sources]).blocks == []
+    result = filter_citation_blocks([block(sources[-1] + " ROIC is income over capital.")])
+    assert [b.text for b in result.blocks] == ["ROIC is income over capital."]
+
+
+def test_split_source_colon_is_omitted_without_swallowing_explanation():
+    result = filter_citation_blocks(
+        [
+            block("Source"),
+            block(": Company financial reports"),
+            block("The figures exclude tax."),
+            block("Source:"),
+            block("Useful section", "section_header"),
+            block("Real case prose."),
+        ]
+    )
+    assert [b.text for b in result.blocks] == [
+        "The figures exclude tax.",
+        "Useful section",
+        "Real case prose.",
+    ]
+
+
+def test_side_by_side_source_fragments_are_filtered_together():
+    result = filter_citation_blocks(
+        [
+            replace(block("Source: Example"), left=50, right=150),
+            replace(block("Stores, Inc. Annual Report."), left=153, right=300),
+            replace(block("Actual body prose continues."), top=450, bottom=400),
+        ]
+    )
+    assert [b.text for b in result.blocks] == ["Actual body prose continues."]

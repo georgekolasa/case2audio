@@ -146,10 +146,10 @@ def test_synthesis_submits_waits_and_downloads(tmp_path: Path, capsys) -> None:
     progress = capsys.readouterr().out
     assert "Connecting to Amazon Polly (Matthew, generative)" in progress
     assert "Submitting 1 audio part to Polly" in progress
-    assert "Polly is processing part 1/1 (task task-123)" in progress
+    assert "Polly is processing part 1/1 (13 characters; task task-123)" in progress
     assert "Polly finished part 1/1; downloading audio" in progress
     assert re.search(
-        r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [^\]]+\] \[bb.pdf\] Polly is processing",
+        r"\[\d{2}:\d{2}:\d{2} [^\]]+\] \[bb.pdf\] Polly is processing",
         progress,
     )
 

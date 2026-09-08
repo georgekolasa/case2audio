@@ -17,6 +17,8 @@ class ExtractionSignals:
     narrated_text_tables: int = 0
     omitted_data_tables: int = 0
     marked_visuals: int = 0
+    omitted_citation_blocks: int = 0
+    retained_explanatory_notes: int = 0
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,15 @@ def assess_narration(
     """Report intentional omissions and block known unsafe narration."""
 
     findings: list[QualityFinding] = []
+    if signals.omitted_citation_blocks:
+        findings.append(
+            QualityFinding(
+                "INFO",
+                "CITATIONS_OMITTED",
+                f"Omitted {signals.omitted_citation_blocks} citation/source blocks; "
+                f"retained {signals.retained_explanatory_notes} explanatory or ambiguous notes.",
+            )
+        )
     folded = " ".join(narration.split()).casefold()
 
     # A failed scrub is a privacy issue, so synthesis must never continue.
@@ -116,9 +127,7 @@ def assess_narration(
             )
         )
 
-    suspicious = sorted(
-        set(re.findall(r"(?i)\b(?:roduct|[a-z]+driven|end-of[a-z]+)\b", narration))
-    )
+    suspicious = sorted(set(re.findall(r"(?i)\b(?:roduct|[a-z]+driven|end-of[a-z]+)\b", narration)))
     if suspicious:
         sample = ", ".join(suspicious[:5])
         findings.append(

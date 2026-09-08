@@ -27,6 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
     extract.add_argument("--debug-dir", type=Path, help="Also save Docling Markdown and JSON.")
     extract.add_argument("--no-ocr", action="store_true", help="Skip OCR for born-digital PDFs.")
     extract.add_argument(
+        "--keep-citations", action="store_true", help="Retain reference lists and citations."
+    )
+    extract.add_argument(
         "--table-mode",
         choices=("smart", "skip", "linearize"),
         default="smart",
@@ -51,6 +54,9 @@ def build_parser() -> argparse.ArgumentParser:
     make.add_argument("pdfs", type=Path, nargs="+", help="Source PDFs, followed by shared options.")
     _add_polly_arguments(make)
     make.add_argument("--no-ocr", action="store_true", help="Skip OCR for born-digital PDFs.")
+    make.add_argument(
+        "--keep-citations", action="store_true", help="Retain reference lists and citations."
+    )
     make.add_argument(
         "--table-mode",
         choices=("smart", "skip", "linearize"),
@@ -99,6 +105,7 @@ def _handle_extract(args: argparse.Namespace) -> int:
         use_ocr=not args.no_ocr,
         table_mode=args.table_mode,
         extra_drop_patterns=tuple(args.drop_regex),
+        keep_citations=args.keep_citations,
     )
     write_extraction(result, output, debug_dir=args.debug_dir)
     print(f"Saved narration: {output.resolve()} ({len(result.narration):,} characters)")
@@ -220,6 +227,7 @@ def _prepare_pdf(args: argparse.Namespace, pdf: Path) -> tuple[str, Path]:
         use_ocr=not args.no_ocr,
         table_mode=args.table_mode,
         extra_drop_patterns=tuple(args.drop_regex),
+        keep_citations=args.keep_citations,
     )
     narration_path = job_dir / "narration.txt"
     write_extraction(result, narration_path, debug_dir=job_dir / "debug")

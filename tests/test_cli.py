@@ -39,6 +39,8 @@ def test_extract_defaults_are_narration_friendly() -> None:
 
     assert args.table_mode == "smart"
     assert args.no_ocr is False
+    assert args.keep_citations is False
+    assert build_parser().parse_args(["extract", "case.pdf", "--keep-citations"]).keep_citations
 
 
 def test_polly_defaults_to_requested_generative_matthew_voice() -> None:

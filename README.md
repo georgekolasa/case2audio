@@ -118,6 +118,7 @@ flowchart LR
         Docling[Docling extraction and optional OCR]
         Order[Reading-order repair]
         Exhibits[Smart table and figure handling]
+        Citations[Filter citations and preserve explanatory notes]
         Clean[Narration cleanup]
         Text[narration.txt]
         Quality[Pre-Polly quality gate]
@@ -125,7 +126,7 @@ flowchart LR
         Download[Poll and download]
         MP3[Local MP3 parts]
 
-        PDF --> Wrapper --> CLI --> Auth --> Safety --> Docling --> Order --> Exhibits --> Clean --> Text
+        PDF --> Wrapper --> CLI --> Auth --> Safety --> Docling --> Order --> Exhibits --> Citations --> Clean --> Text
         Text --> Quality --> Split
         Download --> MP3
     end
@@ -164,6 +165,8 @@ The responsibilities are deliberately separated:
   when narrated.
 - Before extraction, a local PDF safety scan replaces selectable text hidden under opaque black
   rectangles with `[redacted]` in the narration and every debug artifact.
+- After reading-order repair, the citation filter removes source lists and citation-only notes
+  from the narration stream, retaining explanations and leaving the raw extraction for reference.
 - Smart exhibit handling narrates compact text tables, clearly marks dense numeric tables and
   substantial figures for visual review, and never silently drops them.
 - The cleaned result and extraction diagnostics are written under `generated/<pdf-name>/` before
@@ -201,6 +204,21 @@ with a clear spoken notice to review the PDF. Large figures get the same treatme
 `--table-mode skip` to omit every table's cells while retaining notices, or `--table-mode linearize`
 to read every table row. The debug `quality-report.txt` records redactions, narrated tables, and
 intentional visual-review notices before anything is sent to Polly.
+
+Reference lists, bibliographies, endnote citations, citation-only footnotes, and exhibit source
+lines are excluded from narration by default. Definitions, caveats, and explanatory notes are
+kept; clearly marked explanations inside endnotes appear under `Explanatory notes`. Ambiguous
+footnotes are retained rather than risking removal of useful case content. Inline citation numbers
+that cannot be distinguished safely from real numbers may still appear.
+
+Raw Docling Markdown/JSON retain the sources for review. The quality report records omitted
+citation blocks and retained notes. To include citations in a future run:
+
+```bash
+./make-audio bb.pdf sfn.pdf --keep-citations
+```
+
+This option also works with `case2audio extract`. Existing MP3s are not modified.
 
 Results appear under `generated/your-case/`:
 

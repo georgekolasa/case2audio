@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -34,11 +37,12 @@ class PollyOptions:
 
 @dataclass(frozen=True)
 class AudioPart:
-    """One Polly task and its downloaded local output."""
+    """One task and local output; output_uri is historical when s3_deleted is true."""
 
     task_id: str
     output_uri: str
     path: Path
+    s3_deleted: bool = False
 
 
 def split_for_polly(text: str, max_chars: int = DEFAULT_CHUNK_SIZE) -> list[str]:
@@ -204,29 +208,111 @@ def synthesize_to_directory(
         key = s3_key_from_output_uri(output_uri, options.bucket)
         _print_progress(f"Polly finished part {index}/{len(chunks)}; downloading audio...", label)
         try:
-            s3.download_file(options.bucket, key, str(part_path))
-        except Exception as exc:
-            raise Case2AudioError(f"Could not download s3://{options.bucket}/{key}: {exc}") from exc
-
-        named_key = named_keys[index - 1]
-        try:
-            # Copy within S3: no new synthesis. The task original remains available for recovery.
-            s3.copy_object(
-                Bucket=options.bucket,
-                Key=named_key,
-                CopySource={"Bucket": options.bucket, "Key": key},
-            )
+            source = _download_verified(s3, options.bucket, key, part_path)
         except Exception as exc:
             raise Case2AudioError(
-                f"Audio was downloaded to {part_path.resolve()}, but could not copy "
-                f"s3://{options.bucket}/{key} to {named_key}: {exc}. "
-                "Copy the existing S3 object to retry naming; do not rerun synthesis."
+                f"Could not verify download from s3://{options.bucket}/{key}: {exc}. "
+                "S3 audio retained; recover it before lifecycle expiry. Do not rerun synthesis."
             ) from exc
+
+        named_key = named_keys[index - 1]
+        copies = [(key, source)]
+        try:
+            # Pin the source so another run cannot change the object between download and copy.
+            copy_source = {"Bucket": options.bucket, "Key": key}
+            if source.get("VersionId"):
+                copy_source["VersionId"] = source["VersionId"]
+            copied = s3.copy_object(
+                Bucket=options.bucket,
+                Key=named_key,
+                CopySource=copy_source,
+                CopySourceIfMatch=source["ETag"],
+            )
+            copies.append(
+                (
+                    named_key,
+                    {
+                        "ETag": copied["CopyObjectResult"]["ETag"],
+                        "VersionId": copied.get("VersionId"),
+                    },
+                )
+            )
+        except Exception as exc:
+            # Local audio is already safe; a naming failure must not invite paid resynthesis.
+            _print_progress(
+                f"WARNING: Audio verified locally, but S3 naming failed: {exc}. "
+                "S3 audio retained for lifecycle cleanup; do not rerun synthesis.",
+                label,
+            )
+            parts.append(AudioPart(task_id, output_uri, part_path))
+            continue
         output_uri = f"s3://{options.bucket}/{named_key}"
-        _print_progress(f"Saved named audio: {output_uri}", label)
-        parts.append(AudioPart(task_id=task_id, output_uri=output_uri, path=part_path))
+        deleted = _delete_verified_copies(s3, options.bucket, copies, label)
+        parts.append(AudioPart(task_id, output_uri, part_path, s3_deleted=deleted))
 
     return parts
+
+
+def _download_verified(s3: Any, bucket: str, key: str, destination: Path) -> dict:
+    """Stream once, verify size and persisted SHA-256, then atomically publish the file."""
+
+    # The SDK validates S3 checksums when supplied; read through EOF so validation completes.
+    response = s3.get_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
+    temporary: Path | None = None
+    try:
+        expected_size = response["ContentLength"]
+        if expected_size <= 0 or not response.get("ETag"):
+            raise ValueError("S3 returned empty audio or missing object identity")
+        received_hash = hashlib.sha256()
+        received_size = 0
+        with tempfile.NamedTemporaryFile(
+            dir=destination.parent, suffix=".partial", delete=False
+        ) as f:
+            temporary = Path(f.name)
+            while data := response["Body"].read(1024 * 1024):
+                f.write(data)
+                received_hash.update(data)
+                received_size += len(data)
+            f.flush()
+            os.fsync(f.fileno())  # Flush file contents before removing the remote recovery copy.
+        if received_size != expected_size:
+            raise ValueError(f"Expected {expected_size} bytes, received {received_size}")
+        disk_hash = hashlib.sha256()
+        with temporary.open("rb") as f:
+            while data := f.read(1024 * 1024):
+                disk_hash.update(data)
+        if (
+            temporary.stat().st_size != expected_size
+            or disk_hash.digest() != received_hash.digest()
+        ):
+            raise ValueError("Downloaded audio did not pass the on-disk checksum check")
+        temporary.replace(destination)  # Failed downloads never overwrite an existing good MP3.
+        return {"ETag": response["ETag"], "VersionId": response.get("VersionId")}
+    finally:
+        response["Body"].close()
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _delete_verified_copies(s3: Any, bucket: str, copies: list, label: str | None) -> bool:
+    deleted = True
+    for key, identity in reversed(copies):
+        try:
+            args = {"Bucket": bucket, "Key": key, "IfMatch": identity["ETag"]}
+            if identity.get("VersionId"):
+                # Delete the downloaded version, not just a marker that leaves storage billed.
+                args["VersionId"] = identity["VersionId"]
+            s3.delete_object(**args)
+        except Exception as exc:
+            deleted = False
+            _print_progress(
+                f"WARNING: Local audio verified, but S3 cleanup failed for s3://{bucket}/{key}: "
+                f"{exc}. Lifecycle cleanup is the fallback; do not rerun synthesis.",
+                label,
+            )
+    if deleted:
+        _print_progress("Local audio verified; deleted both S3 copies.", label)
+    return deleted
 
 
 def named_audio_key(options: PollyOptions, label: str | None, index: int, total: int) -> str:

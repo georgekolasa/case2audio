@@ -60,8 +60,15 @@ S3 audio uses the PDF name: `bb.pdf` becomes `s3://polly-gsk/case2audio/bb.mp3` 
 `bb-part-002.mp3`, etc. `--prefix` changes the `case2audio/` folder. A later successful run of
 the same name replaces its readable S3 copy. Local downloads use `<PDF name> Case/<PDF name>Case.mp3`,
 with `-part-001`, `-part-002`, etc. for multi-part audio. Existing downloads are not moved.
-Polly's task-ID originals remain under `case2audio/_tasks/` for recovery; the Polly
-task console still links to those originals.
+After each verified local download, both the task original and PDF-named S3 copy are deleted.
+Verification checks the received byte count and rereads the saved file to compare its SHA-256;
+S3 checksums are also requested. Failed downloads preserve the S3 original for recovery.
+Cleanup failures print a warning without failing a successfully downloaded audiobook.
+
+The bucket has a one-day lifecycle fallback scoped to `polly-gsk/case2audio/`, including existing
+objects and `_tasks/`. S3 rounds expiry to midnight UTC (roughly 24–48 hours after upload), then
+deletes asynchronously. Unrelated prefixes are untouched. After successful cleanup, old S3 URLs
+and links in the Polly task console will no longer download audio; use the local MP3.
 
 ```bash
 ./make-audio --ocr scanned-case.pdf    # Scanned/image-only PDF
@@ -128,11 +135,13 @@ flowchart LR
         Quality[Pre-Polly quality gate]
         Split[Polly-sized text chunks]
         Download[Poll and download]
+        Verify[Verify and atomically save download]
         MP3[Local MP3 parts]
+        Cleanup[Delete both S3 copies]
 
         PDF --> Wrapper --> CLI --> Auth --> Safety --> Docling --> Evidence --> Margins --> Exhibits --> Order --> Citations --> Clean --> Text
         Text --> Quality --> Split
-        Download --> MP3
+        Download --> Verify --> MP3 --> Cleanup
     end
 
     subgraph aws[AWS in the configured region]
@@ -149,6 +158,7 @@ flowchart LR
     Auth <--> Validate
     Split -. recheck voice .-> Validate
     S3 --> Download
+    Cleanup --> S3
 ```
 
 The responsibilities are deliberately separated:
@@ -197,16 +207,19 @@ The responsibilities are deliberately separated:
 - `case2audio speak` splits reviewed narration at safe paragraph or sentence boundaries, validates
   the selected voice/engine in the configured region, and starts asynchronous Polly tasks.
 - Polly writes each completed MP3 to the private S3 bucket under `_tasks/`. The CLI polls the tasks,
-  downloads the files into `generated/<pdf-name>/<pdf-name> Case/`, then copies the S3 objects to readable
-  PDF-based names. This copy uses existing audio and does not submit another synthesis task.
+  streams downloads to a temporary file, checks byte count and the on-disk SHA-256, then atomically
+  saves them into `generated/<pdf-name>/<pdf-name> Case/`. It creates the readable PDF-named S3
+  copy and deletes both remote objects, using ETags/version IDs to avoid deleting another run's
+  replacement. Failed downloads keep the original; naming/cleanup errors warn and retain local
+  success. A scoped one-day S3 lifecycle rule cleans up abandoned objects and old versions.
 - `case2audio make` checks the configured AWS session and voice before extraction. An expired
   browser session triggers one login attempt for that same profile in an interactive terminal;
   it then creates a fresh SDK session and verifies access before continuing. `speak` checks
   access too; `extract` stays local. `case2audio doctor` only checks dependencies and AWS access.
 
 Only cleaned narration is sent as synthesis content; the source PDF and Docling debug files stay
-local. S3 objects remain in the private bucket until the account's own cleanup or retention policy
-removes them.
+local. Successful downloads trigger immediate S3 cleanup; interrupted runs rely on the bucket's
+lifecycle fallback. That fallback must be configured separately for a different bucket or prefix.
 
 ## Extraction and output
 
@@ -302,8 +315,20 @@ To synthesize previously reviewed text without extracting again:
 
 Uses the standard SDK credential chain. The bucket must be in the Polly region. Required
 permissions include `polly:DescribeVoices`, `polly:StartSpeechSynthesisTask`,
-`polly:GetSpeechSynthesisTask`, `s3:PutObject`, and `s3:GetObject` for the output bucket.
+`polly:GetSpeechSynthesisTask`, `s3:PutObject`, `s3:GetObject`, and `s3:DeleteObject` for the output
+bucket. Versioned buckets also require `s3:GetObjectVersion` and `s3:DeleteObjectVersion`.
 The initial session check calls `sts:GetCallerIdentity`.
+
+Install or reapply the scoped lifecycle fallback with:
+
+```bash
+.venv/bin/python scripts/set_s3_lifecycle.py --bucket polly-gsk --prefix case2audio --profile case2audio
+```
+
+This setup requires `s3:GetLifecycleConfiguration` and `s3:PutLifecycleConfiguration`. It preserves
+unrelated rules, verifies the saved result, and refuses an empty prefix. Normal audio runs do not
+modify lifecycle configuration. Because expiry includes existing matching objects, recover any
+needed old audio before enabling it on another bucket.
 
 Voice support varies by engine and region. To list valid choices:
 

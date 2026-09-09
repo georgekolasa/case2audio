@@ -1,4 +1,5 @@
 import re
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -65,14 +66,19 @@ class FakeS3:
     def __init__(self) -> None:
         self.download_calls = []
         self.copy_calls = []
+        self.delete_calls = []
 
     def copy_object(self, **kwargs):
         self.copy_calls.append(kwargs)
+        return {"CopyObjectResult": {"ETag": '"audio-etag"'}}
 
-    def download_file(self, bucket, key, filename):
-        self.download_calls.append((bucket, key, filename))
-        # The fake writes bytes so callers can verify a real local output was made.
-        Path(filename).write_bytes(b"fake mp3")
+    def get_object(self, **kwargs):
+        self.download_calls.append((kwargs["Bucket"], kwargs["Key"]))
+        assert kwargs["ChecksumMode"] == "ENABLED"
+        return {"Body": BytesIO(b"fake mp3"), "ContentLength": 8, "ETag": '"audio-etag"'}
+
+    def delete_object(self, **kwargs):
+        self.delete_calls.append(kwargs)
 
 
 class FakeSession:
@@ -140,10 +146,16 @@ def test_synthesis_submits_waits_and_downloads(tmp_path: Path, capsys) -> None:
             "Bucket": "example",
             "Key": "case2audio/bb.mp3",
             "CopySource": {"Bucket": "example", "Key": "job/task-123.mp3"},
+            "CopySourceIfMatch": '"audio-etag"',
         }
     ]
     assert parts[0].output_uri == "s3://example/case2audio/bb.mp3"
     assert parts[0].path == tmp_path / "bbCase.mp3"
+    assert parts[0].s3_deleted
+    assert session.s3.delete_calls == [
+        {"Bucket": "example", "Key": key, "IfMatch": '"audio-etag"'}
+        for key in ["case2audio/bb.mp3", "job/task-123.mp3"]
+    ]
     progress = capsys.readouterr().out
     assert "Connecting to Amazon Polly (Matthew, generative)" in progress
     assert "Submitting 1 audio part to Polly" in progress
@@ -197,20 +209,109 @@ def test_readable_key_preserves_spaces_and_dots():
     assert named_audio_key(PollyOptions(bucket="example", prefix=""), "bb.pdf", 1, 1) == "bb.mp3"
 
 
-def test_copy_failure_keeps_download_and_does_not_resynthesize(tmp_path):
+def test_copy_failure_keeps_download_and_does_not_resynthesize(tmp_path, capsys):
+    session = FakeSession()
+    session.s3.copy_object = Mock(side_effect=RuntimeError("copy denied"))
+    parts = synthesize_to_directory(
+        "A short case.",
+        tmp_path,
+        PollyOptions(bucket="example"),
+        session=session,
+        label="bb.pdf",
+    )
+    assert (tmp_path / "bbCase.mp3").read_bytes() == b"fake mp3"
+    assert len(session.polly.start_calls) == 1
+    assert not parts[0].s3_deleted
+    assert session.s3.delete_calls == []
+    assert "do not rerun synthesis" in capsys.readouterr().out
+
+
+def test_failed_download_keeps_remote_audio_and_previous_local_file(tmp_path):
     import pytest
 
     from case2audio.errors import Case2AudioError
 
     session = FakeSession()
-    session.s3.copy_object = Mock(side_effect=RuntimeError("copy denied"))
-    with pytest.raises(Case2AudioError, match="do not rerun synthesis"):
+    session.s3.get_object = Mock(
+        return_value={
+            "Body": BytesIO(b"truncated"),
+            "ContentLength": 100,
+            "ETag": '"audio-etag"',
+        }
+    )
+    destination = tmp_path / "bbCase.mp3"
+    destination.write_bytes(b"previous good audio")
+    with pytest.raises(Case2AudioError, match="S3 audio retained"):
         synthesize_to_directory(
-            "A short case.",
-            tmp_path,
-            PollyOptions(bucket="example"),
-            session=session,
-            label="bb.pdf",
+            "Text.", tmp_path, PollyOptions(bucket="example"), session=session, label="bb.pdf"
         )
-    assert (tmp_path / "bbCase.mp3").read_bytes() == b"fake mp3"
+    assert destination.read_bytes() == b"previous good audio"
+    assert session.s3.delete_calls == session.s3.copy_calls == []
+    assert list(tmp_path.glob("*.partial")) == []
+
+
+def test_disk_corruption_prevents_remote_deletion(tmp_path, monkeypatch):
+    import os
+
+    import pytest
+
+    from case2audio.errors import Case2AudioError
+
+    monkeypatch.setattr(os, "fsync", lambda fd: os.pwrite(fd, b"bad mp3!", 0))
+    session = FakeSession()
+    with pytest.raises(Case2AudioError, match="checksum check"):
+        synthesize_to_directory(
+            "Text.", tmp_path, PollyOptions(bucket="example"), session=session, label="bb.pdf"
+        )
+    assert session.s3.delete_calls == session.s3.copy_calls == []
+    assert not (tmp_path / "bbCase.mp3").exists()
+
+
+def test_delete_failure_does_not_fail_audio_or_repeat_synthesis(tmp_path, capsys):
+    session = FakeSession()
+    session.s3.delete_object = Mock(side_effect=RuntimeError("access denied"))
+    parts = synthesize_to_directory(
+        "Text.", tmp_path, PollyOptions(bucket="example"), session=session, label="bb.pdf"
+    )
+    assert parts[0].path.read_bytes() == b"fake mp3"
+    assert not parts[0].s3_deleted
+    assert session.s3.delete_object.call_count == 2
     assert len(session.polly.start_calls) == 1
+    assert "Lifecycle cleanup is the fallback" in capsys.readouterr().out
+
+
+def test_versioned_cleanup_targets_only_the_versions_created_by_this_run(tmp_path):
+    session = FakeSession()
+    session.s3.get_object = Mock(
+        return_value={
+            "Body": BytesIO(b"fake mp3"),
+            "ContentLength": 8,
+            "ETag": '"source-etag"',
+            "VersionId": "source-version",
+        }
+    )
+    session.s3.copy_object = Mock(
+        return_value={
+            "VersionId": "copy-version",
+            "CopyObjectResult": {"ETag": '"copy-etag"'},
+        }
+    )
+    parts = synthesize_to_directory(
+        "Text.", tmp_path, PollyOptions(bucket="example"), session=session, label="bb.pdf"
+    )
+    assert parts[0].s3_deleted
+    assert session.s3.copy_object.call_args.kwargs["CopySource"]["VersionId"] == "source-version"
+    assert session.s3.delete_calls == [
+        {
+            "Bucket": "example",
+            "Key": "case2audio/bb.mp3",
+            "IfMatch": '"copy-etag"',
+            "VersionId": "copy-version",
+        },
+        {
+            "Bucket": "example",
+            "Key": "job/task-123.mp3",
+            "IfMatch": '"source-etag"',
+            "VersionId": "source-version",
+        },
+    ]

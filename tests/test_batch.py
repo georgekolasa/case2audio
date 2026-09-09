@@ -67,7 +67,7 @@ def test_batch_preserves_order_and_separate_outputs_with_one_login(batch, capsys
     for pdf, write in zip(batch.pdfs, batch.write.call_args_list, strict=True):
         synth = calls[pdf.stem]
         assert write.args[1] == batch.args.output_dir / pdf.stem / "narration.txt"
-        assert synth.args[1] == batch.args.output_dir / pdf.stem / "audio"
+        assert synth.args[1] == batch.args.output_dir / pdf.stem / f"{pdf.stem} Case"
         assert "session" not in synth.kwargs
         assert synth.kwargs["label"] == pdf.name
     assert "Processing PDF 2/2: sfn.pdf" in capsys.readouterr().out

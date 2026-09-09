@@ -194,7 +194,13 @@ def synthesize_to_directory(
         )
         output_uri = task["OutputUri"]
         extension = "mp3" if options.output_format == "mp3" else options.output_format
-        part_path = output_dir / f"part-{index:03d}.{extension}"
+        # Named downloads remain recognizable when copied out of their case folder.
+        if label:
+            suffix = f"-part-{index:03d}" if len(chunks) > 1 else ""
+            filename = f"{Path(label).stem}Case{suffix}.{extension}"
+        else:
+            filename = f"part-{index:03d}.{extension}"
+        part_path = output_dir / filename
         key = s3_key_from_output_uri(output_uri, options.bucket)
         _print_progress(f"Polly finished part {index}/{len(chunks)}; downloading audio...", label)
         try:

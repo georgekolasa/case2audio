@@ -52,14 +52,15 @@ Recovery also handles AWS's `CreateOAuth2Token` invalid/expired authorization-gr
 Valid sessions proceed without browser login; AWS can still require sign-in when a session
 expires or is revoked.
 
-The MP3 lands at `generated/bb/audio/part-001.mp3`; the reviewed text is
+The MP3 lands at `generated/bb/bb Case/bbCase.mp3`; the reviewed text is
 `generated/bb/narration.txt`. Documents over 95,000 characters produce ordered audio parts.
 
 S3 audio uses the PDF name: `bb.pdf` becomes `s3://polly-gsk/case2audio/bb.mp3` and
 `sfn.pdf` becomes `s3://polly-gsk/case2audio/sfn.mp3`. Longer documents use `bb-part-001.mp3`,
 `bb-part-002.mp3`, etc. `--prefix` changes the `case2audio/` folder. A later successful run of
-the same name replaces its readable S3 copy. Local files retain their existing `part-001.mp3`
-layout. Polly's task-ID originals remain under `case2audio/_tasks/` for recovery; the Polly
+the same name replaces its readable S3 copy. Local downloads use `<PDF name> Case/<PDF name>Case.mp3`,
+with `-part-001`, `-part-002`, etc. for multi-part audio. Existing downloads are not moved.
+Polly's task-ID originals remain under `case2audio/_tasks/` for recovery; the Polly
 task console still links to those originals.
 
 ```bash
@@ -196,7 +197,7 @@ The responsibilities are deliberately separated:
 - `case2audio speak` splits reviewed narration at safe paragraph or sentence boundaries, validates
   the selected voice/engine in the configured region, and starts asynchronous Polly tasks.
 - Polly writes each completed MP3 to the private S3 bucket under `_tasks/`. The CLI polls the tasks,
-  downloads the files into `generated/<pdf-name>/audio/`, then copies the S3 objects to readable
+  downloads the files into `generated/<pdf-name>/<pdf-name> Case/`, then copies the S3 objects to readable
   PDF-based names. This copy uses existing audio and does not submit another synthesis task.
 - `case2audio make` checks the configured AWS session and voice before extraction. An expired
   browser session triggers one login attempt for that same profile in an interactive terminal;
@@ -273,12 +274,13 @@ generated/your-case/
 │   ├── narration-order.md
 │   ├── docling.json
 │   └── quality-report.txt
-└── audio/
-    └── part-001.mp3
+└── your-case Case/
+    └── your-caseCase.mp3
 ```
 
-`part-001.mp3` is the complete audiobook for text under 95,000 characters. Longer documents
-are split at paragraph and sentence boundaries into ordered files.
+`your-caseCase.mp3` is the complete audiobook for text under 95,000 characters. Longer documents
+are split at paragraph and sentence boundaries into `your-caseCase-part-001.mp3`,
+`your-caseCase-part-002.mp3`, etc.
 
 Sidebars detected from their heading and page geometry are moved to a final `Sidebars` section.
 This keeps a box in the left column from interrupting an unfinished sentence in the main article.

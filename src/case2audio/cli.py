@@ -227,7 +227,7 @@ def _prepare_pdf(args: argparse.Namespace, pdf: Path) -> tuple[str, Path]:
     _print_quality(result.quality_report)
     # Save all local diagnostics first, but never submit unsafe text to a paid service.
     _enforce_quality(result.quality_report)
-    return result.narration, job_dir / "audio"
+    return result.narration, job_dir / f"{pdf.stem} Case"
 
 
 def _polly_options(args: argparse.Namespace):

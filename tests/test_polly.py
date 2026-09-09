@@ -143,6 +143,7 @@ def test_synthesis_submits_waits_and_downloads(tmp_path: Path, capsys) -> None:
         }
     ]
     assert parts[0].output_uri == "s3://example/case2audio/bb.mp3"
+    assert parts[0].path == tmp_path / "bbCase.mp3"
     progress = capsys.readouterr().out
     assert "Connecting to Amazon Polly (Matthew, generative)" in progress
     assert "Submitting 1 audio part to Polly" in progress
@@ -183,6 +184,7 @@ def test_large_document_copies_each_part_to_a_distinct_name(tmp_path):
         label="bb.pdf",
     )
     assert len(parts) == 2
+    assert [part.path.name for part in parts] == ["bbCase-part-001.mp3", "bbCase-part-002.mp3"]
     assert [call["Key"] for call in session.s3.copy_calls] == [
         "case2audio/bb-part-001.mp3",
         "case2audio/bb-part-002.mp3",
@@ -210,5 +212,5 @@ def test_copy_failure_keeps_download_and_does_not_resynthesize(tmp_path):
             session=session,
             label="bb.pdf",
         )
-    assert (tmp_path / "part-001.mp3").read_bytes() == b"fake mp3"
+    assert (tmp_path / "bbCase.mp3").read_bytes() == b"fake mp3"
     assert len(session.polly.start_calls) == 1

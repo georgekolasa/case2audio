@@ -128,6 +128,7 @@ def _handle_speak(args: argparse.Namespace) -> int:
 
 
 def _handle_make(args: argparse.Namespace) -> int:
+    from . import retention
     from .auth import prepare_session
     from .polly import _validate_voice_engine, synthesize_to_directory
 
@@ -156,6 +157,12 @@ def _handle_make(args: argparse.Namespace) -> int:
     _validate_voice_engine(clients[0], _polly_options(args))
     pending = {}
     failures: list[str] = []
+    retention_token = retention.begin_batch(args.output_dir, [pdf.stem for pdf in args.pdfs])
+    # Protect all inputs first, then clean up before slow jobs can time out or be interrupted.
+    try:
+        retention.prune_cases(args.output_dir)
+    except OSError as exc:
+        print(f"WARNING: Local cleanup skipped: {exc}. Continuing audio creation.", file=sys.stderr)
 
     def collect(*, block: bool) -> None:
         if not pending:
@@ -167,6 +174,11 @@ def _handle_make(args: argparse.Namespace) -> int:
                 parts = future.result()
                 print(f"Audio ready: {pdf.name}", flush=True)
                 _print_parts(parts)
+                # Retention is bookkeeping, never a reason to repeat a paid synthesis.
+                try:
+                    retention.complete_case(args.output_dir, pdf.stem, retention_token, parts)
+                except (OSError, ValueError) as exc:
+                    print(f"WARNING: Could not record audio completion: {exc}", file=sys.stderr)
             except Exception as exc:
                 failures.append(f"{pdf.name}: {exc}")
                 print(f"Audio failed: {pdf.name}: {exc}", file=sys.stderr, flush=True)
@@ -204,6 +216,10 @@ def _handle_make(args: argparse.Namespace) -> int:
         # Already submitted jobs can still succeed; download them even if another PDF failed.
         while pending:
             collect(block=True)
+    try:
+        retention.finish_batch(args.output_dir, retention_token)
+    except OSError as exc:
+        print(f"WARNING: Local cleanup skipped: {exc}. Downloaded audio is safe.", file=sys.stderr)
     if failures:
         raise Case2AudioError("Batch stopped; completed outputs kept. " + "; ".join(failures))
     return 0

@@ -55,6 +55,22 @@ expires or is revoked.
 The MP3 lands at `generated/bb/bb Case/bbCase.mp3`; the reviewed text is
 `generated/bb/narration.txt`. Documents over 95,000 characters produce ordered audio parts.
 
+At batch startup, after input/AWS checks and before extraction, cleanup keeps the **newest five completed
+cases**, plus **every case completed within the last 48 hours**. So ten cases made today all
+stay. Older completed cases beyond those five move, as whole folders (audio, narration, and
+debug files), from `generated/` to macOS Trash. This is recoverable; **empty Trash to reclaim
+disk space**. Source PDFs and the current batch's case folders are protected. Cleanup happens
+even if subsequent audio jobs fail or time out; it does not wait for downloads to finish.
+
+Polly processing waits up to **25 minutes (1,500 seconds) per audio part**, independently for
+each PDF. This changes how long the command waits, not how quickly Polly generates audio.
+
+Completion timestamps are recorded in each case's `.audio-state.json`. Failed/in-progress
+runs, narration-only folders, and nested review folders are left alone. Older outputs without
+a completion record qualify only when all expected MP3 parts exist; their audio modification
+times provide the age. Recent edits also protect a folder for 48 hours. Separate `make-audio`
+processes coordinate cleanup and cannot run the same case simultaneously.
+
 S3 audio uses the PDF name: `bb.pdf` becomes `s3://polly-gsk/case2audio/bb.mp3` and
 `sfn.pdf` becomes `s3://polly-gsk/case2audio/sfn.mp3`. Longer documents use `bb-part-001.mp3`,
 `bb-part-002.mp3`, etc. `--prefix` changes the `case2audio/` folder. A later successful run of
@@ -138,10 +154,13 @@ flowchart LR
         Verify[Verify and atomically save download]
         MP3[Local MP3 parts]
         Cleanup[Delete both S3 copies]
+        Retention[Before extraction: keep newest 5 and all under 48 hours]
+        Trash[Move older completed case folders to Trash]
 
         PDF --> Wrapper --> CLI --> Auth --> Safety --> Docling --> Evidence --> Margins --> Exhibits --> Order --> Citations --> Clean --> Text
         Text --> Quality --> Split
         Download --> Verify --> MP3 --> Cleanup
+        Auth --> Retention --> Trash
     end
 
     subgraph aws[AWS in the configured region]
@@ -167,6 +186,9 @@ The responsibilities are deliberately separated:
   OCR by default because most source PDFs already contain selectable text. Multiple input paths
   form a batch: one session check, then the per-PDF flow below with separate outputs.
   Bare filenames resolve from `~/Downloads`; explicit paths keep their supplied location.
+- `retention.py` records case completion and runs local cleanup before batch extraction.
+  A filesystem lock protects running batches; uncertain or incomplete outputs are never pruned.
+  This local retention is separate from S3 cleanup and never touches the input PDFs.
 - Docling extraction and quality checks run sequentially on the main thread because of the native
   parser's threading constraints. A bounded worker pool overlaps Polly submission, polling, and
   downloads for up to `--jobs` PDFs (default 2). Workers share Polly/S3 clients created on the

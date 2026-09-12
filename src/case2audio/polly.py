@@ -32,7 +32,8 @@ class PollyOptions:
     engine: str = "generative"
     output_format: str = "mp3"
     poll_seconds: float = 5.0
-    timeout_seconds: float = 900.0
+    # Long generative tasks need more time; each part gets its own deadline.
+    timeout_seconds: float = 25 * 60.0
 
 
 @dataclass(frozen=True)

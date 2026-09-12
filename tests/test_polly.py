@@ -3,6 +3,10 @@ from io import BytesIO
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
+
+from case2audio import polly
+from case2audio.errors import Case2AudioError
 from case2audio.polly import (
     PollyOptions,
     named_audio_key,
@@ -10,6 +14,38 @@ from case2audio.polly import (
     split_for_polly,
     synthesize_to_directory,
 )
+
+
+def test_default_wait_allows_completion_after_900_seconds(monkeypatch):
+    options = PollyOptions(bucket="example")
+    assert options.timeout_seconds == 1500
+    # A fake clock proves the longer wait without sleeping or contacting AWS.
+    clock = iter([0, 0, 1000])
+    monkeypatch.setattr(polly.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(polly.time, "sleep", lambda _: None)
+    client = Mock()
+    client.get_speech_synthesis_task.side_effect = [
+        {"SynthesisTask": {"TaskStatus": "inProgress"}},
+        {"SynthesisTask": {"TaskStatus": "completed"}},
+    ]
+    assert (
+        polly._wait_for_task(
+            client, "test", poll_seconds=5, timeout_seconds=options.timeout_seconds
+        )["TaskStatus"]
+        == "completed"
+    )
+
+
+def test_default_wait_stops_after_25_minutes(monkeypatch):
+    clock = iter([0, 1500])
+    monkeypatch.setattr(polly.time, "monotonic", lambda: next(clock))
+    with pytest.raises(Case2AudioError, match="1500s"):
+        polly._wait_for_task(
+            Mock(),
+            "test",
+            poll_seconds=5,
+            timeout_seconds=PollyOptions(bucket="example").timeout_seconds,
+        )
 
 
 def test_split_for_polly_respects_limit_and_order() -> None:

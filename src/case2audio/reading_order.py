@@ -201,7 +201,13 @@ def _should_merge(previous: TextBlock, current: TextBlock) -> bool:
     if re.search(r"[.!?][\"')\]]?\s*$", previous.text):
         return False
     # Lowercase starts strongly indicate a sentence continued across a column or page.
-    return re.match(r"^[a-z]", current.text.lstrip()) is not None
+    if re.match(r"^[a-z]", current.text.lstrip()) is not None:
+        return True
+    # A page can break immediately after a preposition and continue with a proper noun.
+    # The unfinished function word is stronger evidence than the next word's capital letter.
+    return current.page > previous.page and bool(
+        re.search(r"\b(?:a|an|and|as|at|by|for|from|in|of|or|the|to|with)\s*$", previous.text, re.I)
+    )
 
 
 def _continuation_before_footnotes(merged: list[TextBlock], current: TextBlock) -> int | None:

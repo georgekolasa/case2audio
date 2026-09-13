@@ -182,3 +182,27 @@ def test_cheer_and_contractions_keep_their_spoken_words():
         "BY ALICE AND BOB\n\nGive me an L!\n\n"
         "I've said we've paid; don't break the retailer's promise.\n"
     )
+
+
+def test_audio_cleanup_repairs_clear_source_typos_and_line_break_punctuation():
+    text = clean_markdown(
+        "Textiles used in collection were sustainable. The model was adopted a wave of retailers "
+        "such as such as H&M. "
+        "The factories were independent, none of which. Gap owned. "
+        "The market produced about same total volume. Climate was their number one issue concern. "
+        "An almost a nearly identical piece was orders of magnitudes cheaper. "
+        "Alternative fashion resuse mattered. Revenue was € 27.7 billion. "
+        "Critics called it another case of' greenwashing\": marketing rather than change."
+    )
+    assert "used in the collection" in text
+    assert "adopted by a wave of retailers such as H&M" in text
+    assert "none of which Gap owned" in text
+    assert "about the same total volume" in text
+    assert "number one concern" in text
+    assert "a nearly identical piece was orders of magnitude cheaper" in text
+    assert "fashion reuse" in text
+    assert "€27.7 billion" in text
+    assert "case of 'greenwashing':" in text
+    assert clean_markdown("Customer tastes. 'There is now science.'") == (
+        "Customer tastes. 'There is now science.'\n"
+    )

@@ -165,11 +165,21 @@ def clean_markdown(markdown: str, options: CleanerOptions | None = None) -> str:
     text = re.sub(r"\b([A-Za-z]+)[ \t]*(['’])[ \t]+(s|t|ve|re|ll|d|m)\b", r"\1\2\3", text)
     text = re.sub(r"\b([A-Za-z]+)\s+(['’])(?=\s|[,.])", r"\1\2", text)
     text = re.sub(r"\s+([,.])", r"\1", text)
+    # A closing quote can be a separate PDF object; an opening quote before a word stays spaced.
+    text = re.sub(r"([.!?])\s+(['\"])(?=\s|[,;])", r"\1\2", text)
     text = re.sub(r"\(\s+", "(", text)
     text = re.sub(r"\s+\)", ")", text)
     # A cheer can split its emphasized letter and exclamation into separate Docling blocks.
     text = re.sub(r"\b(Give me an?)\s+([A-Z])\s*!", r"\1 \2!", text)
     text = re.sub(r"[ \t]+([!;])", r"\1", text)
+    # Currency symbols are spoken more reliably when attached to their amount.
+    text = re.sub(r"([$€£])\s+(?=\d)", r"\1", text)
+    # Docling occasionally invents a full stop at a line break inside this construction.
+    text = re.sub(
+        r"\b(none of (?:which|whom))\.\s+([A-Z][\w&'’-]+\s+[a-z])",
+        r"\1 \2",
+        text,
+    )
 
     # Affiliation markers are useful on the cover but have no spoken meaning in a byline.
     def clean_byline(match: re.Match) -> str:

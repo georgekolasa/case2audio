@@ -17,6 +17,7 @@ from .inline_refs import (
     PdfTextEvidence,
     contains_reference_anchor,
     reference_sequence_markers,
+    repair_source_tokens,
     repair_source_word_joins,
     scan_pdf_text_evidence,
     strip_inline_references,
@@ -121,6 +122,7 @@ def extract_pdf(
         references=evidence.references,
         word_joins=evidence.word_joins,
         source_forms=evidence.source_forms,
+        page_texts=evidence.page_texts,
     )
 
     # Never persist selectable text that the rendered PDF deliberately covers.
@@ -189,6 +191,7 @@ def _build_narration_markdown(
     references=(),
     word_joins=(),
     source_forms=(),
+    page_texts=(),
 ) -> tuple[str, ExtractionSignals]:
     """Map Docling items into the small geometry model used by reading-order policy."""
 
@@ -217,16 +220,20 @@ def _build_narration_markdown(
         if (match := re.match(r"^\s*(\d{1,3}|[ivxlcdm]{1,4})[.)]?\s+", block.text))
     }
     known_markers.update(reference_sequence_markers(references))
-    removed_markers = repaired_words = repaired_forms = 0
+    removed_markers = repaired_words = repaired_numbers = repaired_forms = 0
     for index, block in enumerate(blocks):
         if block.label not in {"text", "list_item", "caption"}:
             continue
         text, count = strip_inline_references(block, references, known_markers)
         repaired, word_count = repair_source_word_joins(replace(block, text=text), word_joins)
+        repaired, token_word_count, number_count = repair_source_tokens(
+            replace(block, text=repaired), page_texts
+        )
         repaired, form_count = repair_source_forms(replace(block, text=repaired), source_forms)
         blocks[index] = replace(block, text=repaired)
         removed_markers += count
-        repaired_words += word_count
+        repaired_words += word_count + token_word_count
+        repaired_numbers += number_count
         repaired_forms += form_count
 
     pictures = _content_pictures(document)
@@ -255,6 +262,7 @@ def _build_narration_markdown(
         removed_margin_blocks=removed_furniture,
         removed_inline_markers=removed_markers,
         repaired_source_words=repaired_words,
+        repaired_source_numbers=repaired_numbers,
         repaired_source_forms=repaired_forms,
         removed_front_matter_blocks=removed_front_matter,
         omitted_table_notes=omitted_table_notes,
@@ -271,6 +279,17 @@ def _strip_front_matter(blocks: list[TextBlock]) -> tuple[list[TextBlock], int]:
     active_page: int | None = None
     removed = 0
     for block in blocks:
+        normalized = " ".join(block.text.split())
+        # A named cover badge may be discovered after the article body and otherwise land
+        # inside the page-one sentence that continues onto page two.
+        if (
+            block.page == 1
+            and len(normalized.split()) <= 8
+            and normalized.isupper()
+            and re.search(r"\bCASE SERIES$", normalized)
+        ):
+            removed += 1
+            continue
         if block.label == "section_header" and headings.fullmatch(block.text.strip()):
             active_page = block.page
             removed += 1
@@ -484,7 +503,8 @@ def _table_title(table) -> str:
 
     for row in table.data.grid:
         for cell in row:
-            text = re.sub(r"\s+", " ", cell.text).strip().rstrip(".")
+            # Formatting adds its own period, so a trailing source colon would create ":.".
+            text = re.sub(r"\s+", " ", cell.text).strip().rstrip(".:;")
             if text:
                 return text[:180]
     return "untitled table"

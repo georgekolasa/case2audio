@@ -32,6 +32,8 @@ class PdfTextEvidence:
     references: tuple[RaisedReference, ...]
     word_joins: tuple[WordJoin, ...]
     source_forms: tuple[SourceForm, ...] = ()
+    # Whole-page text lets us repair Docling damage only when the PDF confirms the answer.
+    page_texts: tuple[str, ...] = ()
 
 
 def normalize_quotes(text: str) -> str:
@@ -79,14 +81,22 @@ def scan_pdf_text_evidence(path: Path) -> PdfTextEvidence:
     found = []
     joins = []
     forms = []
+    page_texts = []
     with pdfium.PdfDocument(path) as pdf:
         for page_no in range(len(pdf)):
             page = pdf[page_no]
             text_page = page.get_textpage()
             try:
-                forms.extend(punctuation_forms(text_page.get_text_range(), page_no + 1))
+                page_text = text_page.get_text_range()
+                page_texts.append(page_text)
+                forms.extend(punctuation_forms(page_text, page_no + 1))
                 previous = None
                 prose = None
+                # Raised references often arrive as separate objects: "61", comma, "62".
+                # Keep the prose anchor alive until the whole citation cluster is consumed.
+                citation_anchor = None
+                citation_bounds = None
+                citation_right = None
                 for obj in page.get_objects(textpage=text_page):
                     if obj.type != raw.FPDF_PAGEOBJ_TEXT:
                         continue
@@ -98,14 +108,44 @@ def scan_pdf_text_evidence(path: Path) -> PdfTextEvidence:
                         continue
                     current = (text, obj.get_bounds())
                     marker = raised_reference(prose, current) if prose else None
+                    if (
+                        marker is None
+                        and citation_anchor
+                        and citation_bounds
+                        and citation_right is not None
+                        and re.fullmatch(r"\d{1,3}|[ivxlcdm]{1,4}", text.strip(), re.I)
+                    ):
+                        token = text.strip()
+                        left, bottom, _, top = current[1]
+                        _, base_bottom, _, base_top = citation_bounds
+                        base_height = base_top - base_bottom
+                        # A second small, raised number next to the first belongs to the
+                        # same citation cluster even when no comma object is encoded.
+                        if (
+                            0 <= left - citation_right <= 10
+                            and 0 < top - bottom < base_height * 0.8
+                            and base_bottom + base_height * 0.15 < bottom < base_top
+                        ):
+                            marker = token
                     if marker:
                         # A short local anchor avoids editing a different occurrence on the page.
-                        anchor = " ".join(normalize_quotes(prose[0]).split()[-6:])
+                        if citation_anchor:
+                            anchor = citation_anchor
+                        else:
+                            anchor = " ".join(normalize_quotes(prose[0]).split()[-6:])
+                            citation_anchor = anchor
+                            citation_bounds = prose[1]
                         found.append(
                             RaisedReference(
                                 page_no + 1, marker, anchor, current[1][0], current[1][1]
                             )
                         )
+                        citation_right = current[1][2]
+                    elif citation_anchor and re.fullmatch(r"[,;\s]+", text):
+                        # Punctuation between raised markers is part of the cluster.
+                        citation_right = current[1][2]
+                    else:
+                        citation_anchor = citation_bounds = citation_right = None
                     fragments = touching_word_fragments(previous, current) if previous else None
                     if fragments:
                         joins.append(
@@ -128,7 +168,7 @@ def scan_pdf_text_evidence(path: Path) -> PdfTextEvidence:
             finally:
                 text_page.close()
                 page.close()
-    return PdfTextEvidence(tuple(found), tuple(joins), tuple(forms))
+    return PdfTextEvidence(tuple(found), tuple(joins), tuple(forms), tuple(page_texts))
 
 
 def reference_sequence_markers(references) -> set[str]:
@@ -163,9 +203,93 @@ def repair_source_word_joins(block, joins):
     return text, count
 
 
+def repair_source_tokens(block, page_texts) -> tuple[str, int, int]:
+    """Repair broken word/number spacing only when the same PDF page proves the form."""
+
+    if not 1 <= block.page <= len(page_texts):
+        return block.text, 0, 0
+
+    source = normalize_quotes(page_texts[block.page - 1])
+    source = re.sub(r"\s+", " ", source)
+    source_folded = source.casefold()
+    text = block.text
+    repaired_words = 0
+
+    # Docling can insert a space inside a word even though PDFium sees one clean token.
+    # Work one boundary at a time so "smart casu al" can repair only "casu al".
+    while True:
+        replacements = []
+        words = list(re.finditer(r"[A-Za-z]+", text))
+        for left, right in zip(words, words[1:], strict=False):
+            if not re.fullmatch(r"[ \t]+", text[left.end() : right.start()]):
+                continue
+            joined = left.group() + right.group()
+            separated = (
+                rf"(?<![A-Za-z]){re.escape(left.group())}\s+"
+                rf"{re.escape(right.group())}(?![A-Za-z])"
+            )
+            if (
+                re.search(rf"(?<![A-Za-z]){re.escape(joined)}(?![A-Za-z])", source, re.I)
+                and not re.search(separated, source, re.I)
+            ):
+                replacements.append((left.start(), right.end(), joined))
+        if not replacements:
+            break
+        # Reverse order keeps earlier spans stable; skip overlapping candidates defensively.
+        boundary = len(text) + 1
+        for start, end, joined in reversed(replacements):
+            if end > boundary:
+                continue
+            text = text[:start] + joined + text[end:]
+            boundary = start
+            repaired_words += 1
+
+    repaired_numbers = 0
+
+    def join_percent(match: re.Match) -> str:
+        nonlocal repaired_numbers
+        joined = re.sub(r"\s+", "", match.group())
+        if joined.casefold() not in source_folded:
+            return match.group()
+        repaired_numbers += 1
+        return joined
+
+    # A spaced digit inside a percentage changes the spoken value, so verify it exactly.
+    text = re.sub(r"\b\d+(?:[ \t]+\d+)+%", join_percent, text)
+
+    # Recover a dropped decimal digit when the page contains only one matching currency scale.
+    source_amounts: dict[tuple[str, str], set[str]] = {}
+    for match in re.finditer(
+        r"([$€£])\s*(\d[\d,]*(?:\.\d+)?)\s+(thousand|million|billion|trillion)\b",
+        source,
+        re.I,
+    ):
+        source_amounts.setdefault((match[1], match[3].casefold()), set()).add(match[2])
+
+    def repair_truncated_amount(match: re.Match) -> str:
+        nonlocal repaired_numbers
+        key = (match[1], match[3].casefold())
+        candidates = source_amounts.get(key, set())
+        integer = match[2].rstrip(".")
+        candidates = {value for value in candidates if value.split(".", 1)[0] == integer}
+        if len(candidates) != 1:
+            return match.group()
+        repaired_numbers += 1
+        return f"{match[1]}{next(iter(candidates))} {match[3]}"
+
+    text = re.sub(
+        r"([$€£])\s*(\d[\d,]*\.)\s+(thousand|million|billion|trillion)\b",
+        repair_truncated_amount,
+        text,
+        flags=re.I,
+    )
+    return text, repaired_words, repaired_numbers
+
+
 def strip_inline_references(block, references, known_markers: set[str]):
     text = normalize_quotes(block.text)
     removed = 0
+    grouped: dict[str, list[str]] = {}
     for ref in references:
         # Geometry plus a matching note or a document-wide citation sequence are required.
         if ref.page != block.page or ref.marker not in known_markers:
@@ -175,10 +299,32 @@ def strip_inline_references(block, references, known_markers: set[str]):
             and block.bottom - 3 <= ref.bottom <= block.top + 3
         ):
             continue
-        anchor = reference_anchor_pattern(ref.anchor)
-        pattern = rf"({anchor})\s*{re.escape(ref.marker)}(?![\w.\d])"
-        text, count = re.subn(pattern, r"\1", text, count=1)
-        removed += count
+        grouped.setdefault(ref.anchor, []).append(ref.marker)
+
+    for raw_anchor, markers in grouped.items():
+        anchor = reference_anchor_pattern(raw_anchor)
+        alternatives = "|".join(
+            re.escape(marker) for marker in sorted(set(markers), key=len, reverse=True)
+        )
+        # Remove the whole raised cluster at once. Doing markers one-by-one leaves the
+        # comma behind and prevents later markers from seeing the original prose anchor.
+        pattern = rf"({anchor})(?P<tail>(?:\s*(?:,\s*)?(?:{alternatives}))+)(?![\w.\d])"
+
+        def remove_cluster(
+            match: re.Match,
+            alternatives: str = alternatives,
+            current_text: str = text,
+        ) -> str:
+            nonlocal removed
+            removed += len(re.findall(rf"(?:{alternatives})", match.group("tail"), re.I))
+            # The marker's following space is outside the matched cluster; restore it when
+            # Docling placed the next sentence directly against the raised reference.
+            needs_space = match.end() < len(current_text) and bool(
+                re.match(r"[A-Za-z'\"]", current_text[match.end() :])
+            )
+            return match[1] + (" " if needs_space else "")
+
+        text = re.sub(pattern, remove_cluster, text, count=1, flags=re.I)
     return (text if removed else block.text), removed
 
 

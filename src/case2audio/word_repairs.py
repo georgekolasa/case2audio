@@ -48,6 +48,16 @@ _KNOWN_FORMS = {
     "I ♥ NY": "I Love New York",
     # This duplicated fragment is printed in the source and is uniquely unambiguous in speech.
     "Nvidia VIDIA": "Nvidia",
+    # These are unambiguous source typos that would be especially distracting in speech.
+    "Textiles used in collection": "Textiles used in the collection",
+    "was adopted a wave of retailers": "was adopted by a wave of retailers",
+    "such as such as": "such as",
+    "produced about same total volume": "produced about the same total volume",
+    "number one issue concern": "number one concern",
+    "was often being their number one concern": "was often their number one concern",
+    "almost a nearly identical piece": "a nearly identical piece",
+    "orders of magnitudes cheaper": "orders of magnitude cheaper",
+    "resuse": "reuse",
 }
 
 
@@ -68,4 +78,11 @@ def repair_words(text: str) -> str:
     text = _COMPOUNDS.sub(compound, text)
     for damaged, fixed in _KNOWN_FORMS.items():
         text = re.sub(re.escape(damaged), fixed, text, flags=re.I)
+    # Mixed PDF quote objects can turn “case of ‘greenwashing’” into case of' greenwashing".
+    text = re.sub(
+        r"\bcase of\s*['\"]\s*([^'\"\n]+?)\s*['\"](?=:)",
+        r"case of '\1'",
+        text,
+        flags=re.I,
+    )
     return text

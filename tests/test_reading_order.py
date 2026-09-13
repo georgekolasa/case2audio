@@ -82,6 +82,17 @@ def test_list_item_continues_across_a_page():
     ]
 
 
+def test_cross_page_preposition_merges_before_a_proper_noun():
+    blocks = [
+        block("The comparison begins with", page=1),
+        block("H&M, which replenishes less frequently.", page=2),
+    ]
+    main, _ = order_for_narration(blocks)
+    assert [item.text for item in main] == [
+        "The comparison begins with H&M, which replenishes less frequently."
+    ]
+
+
 def test_narrow_heading_without_sidebar_content_stays_in_main_flow() -> None:
     blocks = [
         block("TECHPULSE'S EMPLOYEES", label="section_header", top=610, bottom=590, right=220),

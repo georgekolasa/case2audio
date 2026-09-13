@@ -41,6 +41,7 @@ class ExtractionSignals:
     removed_margin_blocks: int = 0
     removed_inline_markers: int = 0
     repaired_source_words: int = 0
+    repaired_source_numbers: int = 0
     repaired_source_forms: int = 0
     removed_front_matter_blocks: int = 0
     omitted_table_notes: int = 0
@@ -117,6 +118,15 @@ def assess_narration(
                 f"Repaired {signals.repaired_source_words} word splits confirmed by PDF spacing.",
             )
         )
+    if signals.repaired_source_numbers:
+        findings.append(
+            QualityFinding(
+                "INFO",
+                "SOURCE_NUMBER_REPAIRS",
+                f"Repaired {signals.repaired_source_numbers} damaged number(s) "
+                "confirmed by the PDF.",
+            )
+        )
     if signals.repaired_source_forms:
         findings.append(
             QualityFinding(
@@ -181,6 +191,20 @@ def assess_narration(
             )
         )
 
+    # These patterns change a spoken value and should never reach a paid synthesis request.
+    if re.search(
+        r"\b\d+(?:\s+\d+)+%|[$€£]\s*\d[\d,]*\.\s+(?:thousand|million|billion|trillion)\b",
+        narration,
+        re.I,
+    ):
+        findings.append(
+            QualityFinding(
+                "ERROR",
+                "DAMAGED_NUMBERS",
+                "A percentage or currency amount is malformed; verify it against the PDF.",
+            )
+        )
+
     if signals.narrated_text_tables:
         findings.append(
             QualityFinding(
@@ -225,7 +249,7 @@ def assess_narration(
             "A stray letter interrupts a sentence; check the PDF for missing text.",
         ),
         (
-            r"[.!?][\"'’”)]?\s+\d{1,3}(?=\s*(?:\n|$))|%\s+\d{1,3}\s+[a-z]",
+            r"[.!?][\"'’”)]?\s*(?:,\s*)?\d{1,3}(?=\s*(?:\n|$))|%\s+\d{1,3}\s+[a-z]",
             "POSSIBLE_INLINE_CITATIONS",
             "Possible citation markers remain; review the text.",
         ),

@@ -53,3 +53,9 @@ def test_rotated_running_footer_is_removed_without_losing_table_body():
     )
     body = TextBlock("Projected cash flows", "text", 8, 120, 620, 510, 175, 612, 792)
     assert strip_margin_furniture([body, footer]) == ([body], 1)
+
+
+def test_bullet_prefixed_publisher_logo_is_removed_from_top_margin():
+    logo = block("• Example Business School", top=770, bottom=750)
+    body = block("Real opening prose.", top=700, bottom=660)
+    assert strip_margin_furniture([logo, body]) == ([body], 1)

@@ -34,6 +34,18 @@ def repair_source_forms(block, forms) -> tuple[str, int]:
     for form in forms:
         if form.page != block.page:
             continue
+        expected = form.parts[0] + "".join(
+            separator + part
+            for separator, part in zip(form.separators, form.parts[1:], strict=True)
+        )
+        glued = "".join(form.parts)
+        # A missing separator is unambiguously damaged. Repair it even when the page also
+        # contains a legitimate spaced form such as "company owned" in another sentence.
+        glued_matches = list(re.finditer(rf"\b{re.escape(glued)}\b", text, flags=re.I))
+        if len(glued_matches) == 1:
+            match = glued_matches[0]
+            text = text[: match.start()] + expected + text[match.end() :]
+            repaired += 1
         pattern = r"\b" + r"[ \t]*[-–—]?[ \t]*".join(map(re.escape, form.parts)) + r"\b"
         matches = list(re.finditer(pattern, text))
         # Ambiguous occurrences need better alignment; never choose one by proximity alone.
@@ -43,10 +55,6 @@ def repair_source_forms(block, forms) -> tuple[str, int]:
         if not re.search(r"[-–—]", match[0]) and len(match[0].split()) == len(form.parts):
             # Ordinary word spacing may be deliberate, even if the page also uses a compound.
             continue
-        expected = form.parts[0] + "".join(
-            separator + part
-            for separator, part in zip(form.separators, form.parts[1:], strict=True)
-        )
         if match[0] != expected:
             text = text[: match.start()] + expected + text[match.end() :]
             repaired += 1

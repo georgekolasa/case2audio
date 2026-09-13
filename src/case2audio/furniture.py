@@ -51,9 +51,11 @@ def strip_margin_furniture(blocks: list[TextBlock]) -> tuple[list[TextBlock], in
         fragment = (len(_key(text)) >= 12 or bool(re.search(r"[†‡]$", text))) and any(
             _key(text) in key for key in known if key != _key(text)
         )
+        # Logo extraction can leave a short, bullet-prefixed publisher name in the top margin.
+        logo_label = bool(re.match(r"^[•●▪◦]\s*\S", text))
         if block.label in {"page_header", "page_footer"}:
             continue
-        if margin and (page_label or byline or repeated or fragment):
+        if margin and (page_label or byline or repeated or fragment or logo_label):
             continue
         output.append(block)
     return output, len(blocks) - len(output)

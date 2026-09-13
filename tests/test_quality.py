@@ -94,3 +94,16 @@ def test_damaged_sentence_is_flagged_without_inventing_a_repair():
         "Stores grew quickly; s (see Exhibit 5).", signals=ExtractionSignals()
     )
     assert "DAMAGED_SENTENCE" in report.render()
+
+
+def test_malformed_spoken_numbers_block_paid_synthesis():
+    for text in ("EBITDA was 7 0%.", "Revenue was $1. trillion."):
+        report = assess_narration(text, signals=ExtractionSignals())
+        assert {finding.code for finding in report.blocking} == {"DAMAGED_NUMBERS"}
+
+
+def test_source_number_repairs_are_reported():
+    report = assess_narration(
+        "EBITDA was 70%.", signals=ExtractionSignals(repaired_source_numbers=1)
+    )
+    assert "SOURCE_NUMBER_REPAIRS" in report.render()

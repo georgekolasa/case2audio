@@ -5,6 +5,7 @@ from case2audio.inline_refs import (
     WordJoin,
     raised_reference,
     reference_sequence_markers,
+    repair_source_tokens,
     repair_source_word_joins,
     scan_pdf_text_evidence,
     strip_inline_references,
@@ -68,6 +69,26 @@ def test_nested_quotes_and_italic_spacing_still_allow_confirmed_markers():
     assert result == "use Intel Inside .'"
 
 
+def test_confirmed_citation_cluster_is_removed_with_its_commas():
+    text = "The clothing is non-biodegradable. 61, 62 Therefore, waste increased."
+    refs = [
+        RaisedReference(1, marker, "clothing is non-biodegradable.", 400 + index * 8, 600)
+        for index, marker in enumerate(("61", "62"))
+    ]
+    result, count = strip_inline_references(block(text), refs, {"61", "62"})
+    assert result == "The clothing is non-biodegradable. Therefore, waste increased."
+    assert count == 2
+
+
+def test_removed_reference_keeps_space_before_the_next_sentence():
+    ref = RaisedReference(1, "44", "customer tastes.", 400, 600)
+    result, count = strip_inline_references(
+        block("customer tastes. 44 'There is now science.'"), [ref], {"44"}
+    )
+    assert result == "customer tastes. 'There is now science.'"
+    assert count == 1
+
+
 def test_sequence_evidence_needs_several_consecutive_raised_numbers():
     def refs(numbers):
         return [RaisedReference(1, str(n), "A claim.", 400, 600) for n in numbers]
@@ -100,6 +121,21 @@ def test_source_join_does_not_pick_the_wrong_occurrence_in_a_paragraph():
     assert repair_source_word_joins(block(text), [join]) == (text, 0)
 
 
+def test_page_text_repairs_only_source_confirmed_words_and_numbers():
+    source = (
+        "Factories farther away sold smart casual clothing to customers. "
+        "EBITDA was 70%. The market generated $1.4 trillion. They walked in to see it."
+    )
+    damaged = (
+        "Factories fa rther away sold smart casu al clothing to cust omers. "
+        "EBITDA was 7 0%. The market generated $1. trillion. They walked in to see it."
+    )
+    repaired, words, numbers = repair_source_tokens(block(damaged), (source,))
+    assert repaired == source
+    assert words == 3
+    assert numbers == 2
+
+
 def test_pdf_scanner_handles_separate_periods_spaces_and_releases_pages(monkeypatch, tmp_path):
     import pypdfium2 as pdfium
     import pypdfium2.raw as raw
@@ -110,6 +146,8 @@ def test_pdf_scanner_handles_separate_periods_spaces_and_releases_pages(monkeypa
         ("The claim", (50, 600, 100, 612)),
         (".", (101, 600, 102, 602)),
         ("1", (103, 606, 106, 611)),
+        (",", (107, 606, 108, 611)),
+        ("2", (109, 606, 112, 611)),
         ("expa", (50, 580, 100, 592)),
         ("nd", (101, 580, 111, 592)),
         ("in", (50, 560, 100, 572)),
@@ -126,7 +164,7 @@ def test_pdf_scanner_handles_separate_periods_spaces_and_releases_pages(monkeypa
     ]
     page = SimpleNamespace(
         get_textpage=lambda: SimpleNamespace(
-            get_text_range=lambda: "The claim.1 expand in to",
+            get_text_range=lambda: "The claim.1,2 expand in to",
             close=lambda: closed.append("text"),
         ),
         get_objects=lambda **_: iter(objects),
@@ -148,10 +186,12 @@ def test_pdf_scanner_handles_separate_periods_spaces_and_releases_pages(monkeypa
 
     monkeypatch.setattr(pdfium, "PdfDocument", lambda _: Document())
     evidence = scan_pdf_text_evidence(tmp_path / "synthetic.pdf")
-    assert [r.marker for r in evidence.references] == ["1", "28"]
+    assert [r.marker for r in evidence.references] == ["1", "2", "28"]
     assert evidence.references[0].anchor == "The claim."
+    assert evidence.references[1].anchor == "The claim."
     assert [(j.left_word, j.right_word) for j in evidence.word_joins] == [("expa", "nd")]
     assert closed == ["text", "page", "document"]
+    assert evidence.page_texts == ("The claim.1,2 expand in to",)
 
 
 def test_year_citation_is_not_confused_with_an_exponent():

@@ -64,6 +64,7 @@ def test_dense_table_uses_its_merged_first_cell_as_title() -> None:
     assert _is_generic_table_title("AB InBev 2016")
     assert _is_generic_table_title("Business model")
     assert _is_generic_table_title("Supplier")
+    assert _table_title(_table([["Fiscal year ended:"]])) == "Fiscal year ended"
 
 
 def test_small_numeric_tables_are_not_misclassified_as_text():
@@ -124,6 +125,17 @@ def test_front_matter_stops_at_the_next_page_without_a_heading():
     kept, removed = _strip_front_matter(blocks)
     assert [block.text for block in kept] == ["Real opening prose."]
     assert removed == 4
+
+
+def test_named_case_series_badge_is_removed_from_the_cover():
+    blocks = [
+        _block("Opening prose continues", page=1),
+        _block("THE EXAMPLE CASE SERIES", page=1, left=420, right=530),
+        _block("onto the following page.", page=2),
+    ]
+    kept, removed = _strip_front_matter(blocks)
+    assert [block.text for block in kept] == [blocks[0].text, blocks[2].text]
+    assert removed == 1
 
 
 def test_cover_metadata_cannot_swallow_page_two_intro():

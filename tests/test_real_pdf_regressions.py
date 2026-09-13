@@ -59,3 +59,29 @@ def test_sfn_keeps_definitions_and_page_continuations(extracted):
     assert "Figure omitted. See PDF page 11." in text
     assert "A TAXONOMY OF VALUE-BASED STRATEGIES" in text
     assert not re.search(r"[\ue000-\uf8ff]|Nvidia VIDIA", text)
+
+
+def test_zara_repairs_audio_breakage_without_narrating_endnotes(extracted):
+    text = (extracted / "Zara1/narration.txt").read_text()
+    assert "Between sustainability-conscious consumers pushing" in text
+    assert "70% of Ebitda" in text
+    assert "$1.4 trillion" in text
+    assert "Factories farther" in text
+    assert "smart casual" in text
+    assert "customers who purchased" in text
+    assert "none of which Gap owned" in text
+    assert "offer fashion and quality" in text
+    assert "Americans consume is sent" in text
+    assert "prepared to go public" in text
+    assert "At H&M, however" in text
+    assert "customer tastes. 'There is now science" in text
+    assert "fashion reuse/resale/rental" in text
+    assert "THE JEROME CHAZEN CASE SERIES" not in text
+    assert not re.search(r"\b(?:fa rther|companyowned|casu al|cust omers|a nd|i s|pub lic)\b", text)
+    assert not re.search(
+        r"(?:\.\s*',?\s*12\b|non-biodegradable\.,?\s*62\b|\.\s*71\b)", text
+    )
+    assert "Endnotes" not in text
+    report = (extracted / "Zara1/debug/quality-report.txt").read_text()
+    assert "DAMAGED_NUMBERS" not in report
+    assert "POSSIBLE_INLINE_CITATIONS" not in report

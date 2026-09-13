@@ -523,6 +523,7 @@ def _is_generic_table_title(title: str) -> bool:
         "company",
         "country",
         "measure",
+        "metric",
         "operating cost",
         "package size",
         "price segment",

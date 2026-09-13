@@ -63,6 +63,7 @@ def test_dense_table_uses_its_merged_first_cell_as_title() -> None:
     assert _is_generic_table_title("Rank")
     assert _is_generic_table_title("AB InBev 2016")
     assert _is_generic_table_title("Business model")
+    assert _is_generic_table_title("Metric")
     assert _is_generic_table_title("Supplier")
     assert _table_title(_table([["Fiscal year ended:"]])) == "Fiscal year ended"
 

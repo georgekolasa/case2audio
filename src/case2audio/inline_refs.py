@@ -228,10 +228,9 @@ def repair_source_tokens(block, page_texts) -> tuple[str, int, int]:
                 rf"(?<![A-Za-z]){re.escape(left.group())}\s+"
                 rf"{re.escape(right.group())}(?![A-Za-z])"
             )
-            if (
-                re.search(rf"(?<![A-Za-z]){re.escape(joined)}(?![A-Za-z])", source, re.I)
-                and not re.search(separated, source, re.I)
-            ):
+            if re.search(
+                rf"(?<![A-Za-z]){re.escape(joined)}(?![A-Za-z])", source, re.I
+            ) and not re.search(separated, source, re.I):
                 replacements.append((left.start(), right.end(), joined))
         if not replacements:
             break

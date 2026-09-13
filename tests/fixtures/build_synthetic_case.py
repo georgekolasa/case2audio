@@ -1,8 +1,11 @@
 """Rebuild the committed PDF used by the portable end-to-end extraction test."""
 
+from io import BytesIO
 from pathlib import Path
 
+from PIL import Image, ImageDraw
 from reportlab.lib.pagesizes import letter
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen.canvas import Canvas
 
@@ -31,6 +34,66 @@ def draw_cited_sentence(canvas: Canvas, text: str, marker: str, *, y: float) -> 
     canvas.drawString(marker_x, y + 5, marker)
 
 
+def draw_fragments(
+    canvas: Canvas,
+    fragments: list[tuple[str, float, float, float]],
+    *,
+    y: float,
+) -> None:
+    """Draw one visual line as separate PDF objects to reproduce parser spacing damage."""
+
+    x = LEFT
+    for text, font_size, rise, gap_after in fragments:
+        canvas.setFont("Helvetica", font_size)
+        canvas.drawString(x, y + rise, text)
+        x += stringWidth(text, "Helvetica", font_size) + gap_after
+
+
+def draw_table(
+    canvas: Canvas,
+    rows: list[list[str]],
+    *,
+    x: float,
+    top: float,
+    column_widths: list[float],
+    row_height: float = 20,
+) -> None:
+    """Draw real cell borders so Docling must classify the table instead of plain prose."""
+
+    width = sum(column_widths)
+    height = len(rows) * row_height
+    canvas.setLineWidth(0.6)
+    canvas.rect(x, top - height, width, height)
+    for row_index in range(1, len(rows)):
+        y = top - row_index * row_height
+        canvas.line(x, y, x + width, y)
+    cursor = x
+    for column_width in column_widths[:-1]:
+        cursor += column_width
+        canvas.line(cursor, top, cursor, top - height)
+    canvas.setFont("Helvetica", 8)
+    for row_index, row in enumerate(rows):
+        cursor = x
+        for column_index, cell in enumerate(row):
+            canvas.drawString(cursor + 4, top - (row_index + 0.7) * row_height, cell)
+            cursor += column_widths[column_index]
+
+
+def fixture_figure() -> ImageReader:
+    """Return a simple raster so figure handling is tested without external assets."""
+
+    image = Image.new("RGB", (600, 200), "white")
+    drawing = ImageDraw.Draw(image)
+    drawing.rectangle((20, 35, 250, 165), fill="#d9e8fb", outline="#3b73b9", width=5)
+    drawing.rectangle((350, 35, 580, 165), fill="#dff3e4", outline="#438b52", width=5)
+    drawing.line((260, 100, 340, 100), fill="#555555", width=8)
+    drawing.polygon([(340, 100), (315, 85), (315, 115)], fill="#555555")
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    return ImageReader(buffer)
+
+
 def draw_footer(canvas: Canvas, page: int) -> None:
     """Repeat furniture on every page so the extractor must remove it."""
 
@@ -52,14 +115,27 @@ def build() -> None:
     canvas.setFont("Helvetica", 10)
     canvas.drawString(LEFT, HEIGHT - 132, "BY TEST AUTHORS")
 
-    y = draw_lines(
+    # The first lines look normal but use odd object boundaries seen in troublesome cases.
+    # PDFium retains the clean source while Docling adds spaces that cleanup must repair.
+    draw_fragments(
         canvas,
         [
-            "The company generated $1.4 trillion in sales while maintaining a 70% margin.",
-            "Its managers used source evidence instead of guessing at damaged words or numbers.",
+            ("The company generated $1.", 11, 0, 0.5),
+            ("4", 7, 3, 0.5),
+            (" trillion in sales while maintaining a 7", 11, 0, 1.5),
+            ("0% margin.", 11, -1, 0),
         ],
         y=HEIGHT - 175,
     )
+    draw_fragments(
+        canvas,
+        [
+            ("Factories fa", 11, 0, 1.5),
+            ("rther from headquarters used source evidence instead of guessing.", 11, -1, 0),
+        ],
+        y=HEIGHT - 191,
+    )
+    y = HEIGHT - 207
     draw_cited_sentence(canvas, "Customers supported the measured expansion.", "1", y=y - 8)
     draw_cited_sentence(
         canvas,
@@ -75,6 +151,12 @@ def build() -> None:
         ],
         y=90,
     )
+
+    canvas.setFont("Helvetica-Bold", 8)
+    canvas.drawString(330, 250, "Copyright information")
+    canvas.setFont("Helvetica", 7)
+    canvas.drawString(330, 237, "© 2026 by Example University. All rights reserved.")
+    canvas.drawString(330, 224, "This document is authorized for use only by Test Student.")
     draw_footer(canvas, 1)
     canvas.showPage()
 
@@ -97,6 +179,51 @@ def build() -> None:
         ],
         y=y - 42,
     )
+
+    canvas.setFont("Helvetica-Bold", 10)
+    canvas.drawString(LEFT, 565, "Exhibit 1. Decision Options")
+    draw_table(
+        canvas,
+        [
+            ["Decision", "Meaning"],
+            ["Expand", "Open two stores"],
+            ["Hold", "Keep the current footprint"],
+        ],
+        x=LEFT,
+        top=545,
+        column_widths=[140, 290],
+    )
+
+    canvas.setFont("Helvetica-Bold", 10)
+    canvas.drawString(LEFT, 445, "Exhibit 2. Five-Year Financial Summary")
+    draw_table(
+        canvas,
+        [
+            ["Metric", "2022", "2023", "2024", "2025"],
+            ["Revenue", "105", "118", "132", "149"],
+            ["Costs", "81", "90", "101", "114"],
+            ["Margin", "24", "28", "31", "35"],
+        ],
+        x=LEFT,
+        top=425,
+        column_widths=[110, 80, 80, 80, 80],
+    )
+
+    canvas.setFont("Helvetica-Bold", 10)
+    canvas.drawString(LEFT, 315, "Figure 1. Distribution Paths")
+    figure_x, figure_y, figure_width, figure_height = LEFT, 105, 430, 185
+    canvas.drawImage(
+        fixture_figure(),
+        figure_x,
+        figure_y,
+        width=figure_width,
+        height=figure_height,
+        mask="auto",
+    )
+    # Separate vector labels mimic the loose text Docling finds inside real diagrams.
+    canvas.setFont("Helvetica-Bold", 10)
+    canvas.drawCentredString(figure_x + 95, figure_y + 87, "Legacy channel")
+    canvas.drawCentredString(figure_x + 335, figure_y + 87, "Future channel")
     draw_footer(canvas, 2)
     canvas.showPage()
 

@@ -1,0 +1,2 @@
+# PDFs are binary artifacts; text diffs only expose encoded streams and false whitespace errors.
+*.pdf binary

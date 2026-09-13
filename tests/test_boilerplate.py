@@ -58,3 +58,12 @@ def test_heading_does_not_swallow_unknown_following_content():
     assert clean_markdown("# Copyright information\n\nThe company sold 60 licenses.") == (
         "The company sold 60 licenses.\n"
     )
+
+
+def test_ocr_publishing_notices_leave_adjacent_case_prose():
+    text = (
+        "This version of the case replaces an earlier version that was published in 2013. "
+        "This case is used as a teaching tool and not for research and is purely fictional. "
+        "Cases may contain fictionalized elements. The budget is €75 million."
+    )
+    assert clean_markdown(text) == "The budget is €75 million.\n"

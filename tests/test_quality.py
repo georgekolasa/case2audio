@@ -1,6 +1,29 @@
 from case2audio.quality import ExtractionSignals, assess_narration
 
 
+def test_corrupt_font_codes_are_blocked_before_polly():
+    import pytest
+
+    from case2audio.cli import _enforce_quality
+    from case2audio.errors import Case2AudioError
+
+    # Synthetic excerpt of the Valuation1 failure, without licensed case text.
+    report = assess_narration("161 162 163 i255 " * 100, signals=ExtractionSignals())
+    assert "CORRUPT_TEXT" in report.render()
+    with pytest.raises(Case2AudioError):
+        _enforce_quality(report)
+
+
+def test_financial_prose_is_not_mistaken_for_font_codes():
+    text = "In 2024, project 1 cost $100 million and returned 12.5% over 10 years. " * 100
+    assert not assess_narration(text, signals=ExtractionSignals()).blocking
+
+
+def test_empty_extraction_and_numeric_dump_are_blocked():
+    for text in ("", "123 234 345 " * 100, "\x04\x05\x06 word " * 100):
+        assert "CORRUPT_TEXT" in assess_narration(text, signals=ExtractionSignals()).render()
+
+
 def test_quality_gate_blocks_redaction_leaks_and_running_footers() -> None:
     report = assess_narration(
         "Private Person\n\nPage 9 | Example Case\n",

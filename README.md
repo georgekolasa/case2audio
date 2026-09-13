@@ -43,6 +43,13 @@ That's the normal command. No virtualenv activation or AWS flags needed. Default
 Generative, and no OCR for selectable-text PDFs. AWS bucket, region, and profile come from
 `.case2audio.env`.
 
+Broken embedded text (for example, thousands of `i255`/numeric font codes) triggers one
+automatic **local full-page OCR retry**, even with the default `--no-ocr`. On macOS this uses
+Apple Vision via `ocrmac`; other platforms use Docling's available OCR engine. The PDF is not
+uploaded for OCR. Empty text, widespread encoding debris, and repeated isolated-letter garbage
+are blocked before Polly. If the retry still fails, no audio is submitted. OCR is not perfect;
+review names, figures, and the quality report when `OCR_RECOVERY` appears.
+
 The command checks AWS access **before extracting the PDF**. If your browser login has expired,
 it runs `aws login --profile case2audio` (or the configured profile), opens the browser, and
 continues after you sign in. SSO profiles use `aws sso login`. Polly progress messages show when
@@ -141,6 +148,7 @@ flowchart LR
         Auth[Check AWS session and refresh browser login]
         Safety[Visual-redaction safety scan]
         Docling[Docling extraction and optional OCR]
+        OCR[Corrupt text: retry once with local full-page OCR]
         Evidence[Original PDF spacing, punctuation, and raised markers]
         Margins[Remove front matter and margin text]
         Order[Reading-order repair]
@@ -159,6 +167,7 @@ flowchart LR
 
         PDF --> Wrapper --> CLI --> Auth --> Safety --> Docling --> Evidence --> Margins --> Exhibits --> Order --> Citations --> Clean --> Text
         Text --> Quality --> Split
+        Docling -. corrupt text .-> OCR --> Evidence
         Download --> Verify --> MP3 --> Cleanup
         Auth --> Retention --> Trash
     end
@@ -195,6 +204,9 @@ The responsibilities are deliberately separated:
   main thread, so credential refresh is coordinated instead of racing the same cached token.
   The SDK session preserves the AWS profile's login region; `CASE2AUDIO_REGION` selects only
   the service region for Polly, S3, and STS.
+- Corrupt embedded text triggers a single full-page OCR retry. Rejected PDF text is not reused
+  as word/citation repair evidence. On macOS, a close-up OCR check can recover isolated currency
+  suffixes missed by full-page OCR; only explicit high-confidence image text is accepted.
 - `case2audio extract` runs entirely on the local machine. Docling reads the PDF, the reading-order
   layer repairs misplaced headings and moves real sidebars out of the main narrative, and the
   cleanup layer removes administrative front matter, page furniture, duplicate headings, and

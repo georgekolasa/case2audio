@@ -17,6 +17,8 @@ dependencies = [
   "boto3[crt]>=1.43,<2",
   # Inspect original PDF objects so black-box redactions cannot leak hidden text.
   "pypdfium2>=5.13,<6",
+  # Native Vision OCR recovers corrupt embedded fonts without uploading the PDF.
+  "ocrmac>=1,<2; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]

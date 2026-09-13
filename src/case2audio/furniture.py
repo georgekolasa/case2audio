@@ -18,7 +18,13 @@ def strip_margin_furniture(blocks: list[TextBlock]) -> tuple[list[TextBlock], in
 
     def in_margin(block: TextBlock) -> bool:
         # A whole block must be in the margin; never crop the bottom of a body paragraph.
-        return block.top < block.page_height * 0.11 or block.bottom > block.page_height * 0.94
+        return (
+            block.top < block.page_height * 0.11
+            or block.bottom > block.page_height * 0.94
+            # Landscape tables can have their running footer rotated down a side margin.
+            or block.left > block.page_width * 0.87
+            or block.right < block.page_width * 0.11
+        )
 
     for block in blocks:
         if in_margin(block) and block.label not in {"footnote", "note"}:

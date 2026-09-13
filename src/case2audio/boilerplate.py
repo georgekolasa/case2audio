@@ -18,6 +18,9 @@ _NOTICE_SENTENCES = tuple(
     re.compile(pattern, re.I)
     for pattern in (
         r"^all rights reserved[.!]?\s*",
+        r"^this version of the case replaces an earlier version[^.]*\.(?:\s*|$)",
+        r"^this case is used as a teaching tool[^.]*\.(?:\s*|$)",
+        r"^cases may contain fictionalized elements\.(?:\s*|$)",
         r"^this (?:case|document|article) includes (?:minor editorial changes|changes made|"
         r"editorial changes)[^.]*\.(?:\s*|$)",
         r"^this (?:case|document) is for teaching purposes only[^.]*\.(?:\s*|$)",

@@ -9,11 +9,30 @@ from typing import Literal
 Severity = Literal["INFO", "WARN", "ERROR"]
 
 
+def has_corrupt_text(text: str) -> bool:
+    """Detect encoding debris, not ordinary financial figures or numbered lists."""
+    tokens = text.split()
+    if not tokens:
+        return True
+    # Broken subset fonts surface as repeated glyph names plus numeric character codes.
+    debris = len(re.findall(r"\b(?:i\d{2,5}|cid:?\d+)\b", text))
+    numbers = sum(token.isdigit() for token in tokens)
+    controls = sum(ord(char) < 32 and char not in "\n\r\t" for char in text)
+    return (
+        (debris >= 10 and debris / len(tokens) > 0.02)
+        or (len(tokens) >= 100 and numbers / len(tokens) > 0.8)
+        or (controls >= 10 and controls / len(text) > 0.02)
+        # Failed OCR can replace a line with isolated letters instead of numeric codes.
+        or bool(re.search(r"\b(?:[B-HJ-Zb-hj-z]\s+){5,}", text))
+    )
+
+
 @dataclass(frozen=True)
 class ExtractionSignals:
     """Counts from extraction that plain narration text cannot recover later."""
 
     redacted_text_items: int = 0
+    full_page_ocr: bool = False
     narrated_text_tables: int = 0
     omitted_data_tables: int = 0
     marked_visuals: int = 0
@@ -70,6 +89,20 @@ def assess_narration(
     """Report intentional omissions and block known unsafe narration."""
 
     findings: list[QualityFinding] = []
+    if signals.full_page_ocr:
+        findings.append(
+            QualityFinding(
+                "INFO", "OCR_RECOVERY", "Replaced corrupt embedded text with local full-page OCR."
+            )
+        )
+    if has_corrupt_text(narration):
+        findings.append(
+            QualityFinding(
+                "ERROR",
+                "CORRUPT_TEXT",
+                "Text is empty or contains widespread encoding debris; do not send it to Polly.",
+            )
+        )
     for count, code, description in (
         (signals.removed_margin_blocks, "MARGIN_TEXT_REMOVED", "page-margin blocks"),
         (signals.removed_inline_markers, "INLINE_CITATIONS_REMOVED", "confirmed raised citations"),

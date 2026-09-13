@@ -45,3 +45,11 @@ def test_repeated_prose_outside_the_margin_is_not_removed():
 def test_body_block_crossing_the_margin_is_not_cropped():
     blocks = [block("Real prose ending near the page edge.", top=120, bottom=50)]
     assert strip_margin_furniture(blocks) == (blocks, 0)
+
+
+def test_rotated_running_footer_is_removed_without_losing_table_body():
+    footer = TextBlock(
+        "Example Case | Page 8 BY AUTHOR", "section_header", 8, 538, 620, 567, 175, 612, 792
+    )
+    body = TextBlock("Projected cash flows", "text", 8, 120, 620, 510, 175, 612, 792)
+    assert strip_margin_furniture([body, footer]) == ([body], 1)

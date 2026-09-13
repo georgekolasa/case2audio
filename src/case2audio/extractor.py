@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from .cleaner import CleanerOptions, clean_markdown
 from .errors import Case2AudioError
 from .furniture import strip_margin_furniture
 from .inline_refs import (
+    PdfTextEvidence,
     contains_reference_anchor,
     reference_sequence_markers,
     repair_source_word_joins,
@@ -20,7 +22,7 @@ from .inline_refs import (
     strip_inline_references,
 )
 from .pdf_safety import scan_visual_redactions, scrub_hidden_text, scrub_hidden_values
-from .quality import ExtractionSignals, QualityReport, assess_narration
+from .quality import ExtractionSignals, QualityReport, assess_narration, has_corrupt_text
 from .reading_order import TextBlock, order_for_narration, render_markdown
 from .source_forms import repair_source_forms
 
@@ -42,6 +44,7 @@ def extract_pdf(
     use_ocr: bool = True,
     table_mode: str = "smart",
     extra_drop_patterns: tuple[str, ...] = (),
+    _force_ocr: bool = False,
 ) -> ExtractionResult:
     """Extract one local PDF and omit Docling's furniture layer."""
 
@@ -57,12 +60,17 @@ def extract_pdf(
     # Lazy imports keep `case2audio --help` fast despite Docling's large ML stack.
     from docling.datamodel.backend_options import ThreadedDoclingParseBackendOptions
     from docling.datamodel.base_models import InputFormat
-    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.datamodel.pipeline_options import OcrMacOptions, OcrMode, PdfPipelineOptions
     from docling.document_converter import DocumentConverter, PdfFormatOption
     from docling_core.types.doc import ContentLayer
 
     pipeline_options = PdfPipelineOptions()
-    pipeline_options.do_ocr = use_ocr
+    pipeline_options.do_ocr = use_ocr or _force_ocr
+    if _force_ocr:
+        # Ordinary OCR can trust the broken embedded text; full-page OCR replaces it.
+        pipeline_options.ocr_options.mode = OcrMode.FULL_PAGE
+        if sys.platform == "darwin":
+            pipeline_options.ocr_options = OcrMacOptions(mode=OcrMode.FULL_PAGE, lang=["en-US"])
     # Tables are detected even when narration later skips them; raw output stays useful.
     pipeline_options.do_table_structure = True
 
@@ -83,13 +91,29 @@ def extract_pdf(
     except Exception as exc:  # Docling exposes several backend-specific failures.
         raise Case2AudioError(f"Docling could not parse {path.name}: {exc}") from exc
 
+    if _force_ocr and sys.platform == "darwin":
+        from .ocr_recovery import recover_currency_suffixes
+
+        recover_currency_suffixes(document, path)
+
     # Explicit BODY filtering prevents page furniture from becoming spoken content.
     markdown = document.export_to_markdown(
         included_content_layers={ContentLayer.BODY},
         page_break_placeholder="\n\n",
     )
+    if has_corrupt_text(markdown) and not _force_ocr:
+        print("Corrupted PDF text detected; retrying locally with full-page OCR...", flush=True)
+        # Retry only once. A bad OCR result remains blocked by the final quality gate.
+        return extract_pdf(
+            path,
+            use_ocr=True,
+            table_mode=table_mode,
+            extra_drop_patterns=extra_drop_patterns,
+            _force_ocr=True,
+        )
     # Our geometry layer repairs headings and explains content that cannot safely become speech.
-    evidence = scan_pdf_text_evidence(path)
+    # Once the embedded text is rejected, it cannot be trusted to "repair" OCR words.
+    evidence = PdfTextEvidence((), ()) if _force_ocr else scan_pdf_text_evidence(path)
     narration_markdown, signals = _build_narration_markdown(
         document,
         ContentLayer.BODY,
@@ -106,7 +130,9 @@ def extract_pdf(
         narration_markdown,
         CleanerOptions(table_mode=table_mode, extra_drop_patterns=extra_drop_patterns),
     )
-    signals = replace(signals, redacted_text_items=len(redactions.hidden_texts))
+    signals = replace(
+        signals, redacted_text_items=len(redactions.hidden_texts), full_page_ocr=_force_ocr
+    )
     quality_report = assess_narration(
         narration,
         signals=signals,

@@ -390,9 +390,18 @@ or `./make-audio`.
 
 Regression tests cover footer/paragraph boundaries, multi-page character spans, real numbers
 versus raised citations, source-confirmed word joins, mixed explanatory notes, and numeric
-table classification. For an end-to-end check, run `case2audio extract` on a local PDF and
-review `narration.txt` plus the debug quality report; this never calls AWS. Keep licensed
-PDFs and generated outputs out of test fixtures and Git.
+table classification. The normal suite also sends a tiny, unlicensed synthetic PDF through
+the complete Docling-to-narration pipeline. It verifies raised citation removal, endnote and
+page-furniture removal, numeric preservation, and cross-page sentence joining without AWS.
+
+The fixture is committed at `tests/fixtures/synthetic-case.pdf`. Rebuild it deterministically
+after changing its content with:
+
+```bash
+.venv/bin/python tests/fixtures/build_synthetic_case.py
+```
+
+Keep licensed PDFs and generated outputs out of test fixtures and Git.
 
 The optional real-case checks cover Walmart, bb, and sfn. Generate fresh local outputs, then
 point the checks at their parent directory:
@@ -410,8 +419,9 @@ These checks catch missing introductory prose and explanatory footnotes, false t
 leaked citations, damaged words, and broken figure handling. They are skipped unless that
 environment variable is set; CI still works without personal PDFs.
 
-CI runs the fast unit tests and lint checks without downloading Docling models or calling AWS.
-The AWS test uses fakes, so pull requests cannot create paid synthesis tasks.
+CI runs the fast unit tests plus the small synthetic end-to-end extraction. A fresh runner may
+populate Docling's model cache, but tests never call AWS; Polly tests use fakes, so pull requests
+cannot create paid synthesis tasks.
 
 ## Reference docs
 

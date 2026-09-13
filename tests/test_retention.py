@@ -95,6 +95,14 @@ def test_legacy_audio_qualifies_but_narration_only_and_nested_reviews_do_not(tmp
     assert retention._candidate(root / "review") is None
 
 
+def test_legacy_custom_audio_folder_qualifies(tmp_path):
+    folder, audio = make_case(tmp_path, "legacy", 9 * DAY, legacy=True)
+    custom = folder / "Old Custom Name" / "part-001.mp3"
+    custom.parent.mkdir()
+    audio.rename(custom)
+    assert retention._candidate(folder) is not None
+
+
 def test_partial_empty_missing_and_linked_files_are_never_pruned(tmp_path):
     folder, audio = make_case(tmp_path, "case", 9 * DAY)
     partial = folder / "download.partial"
@@ -156,3 +164,9 @@ def test_malformed_state_is_preserved(tmp_path):
     folder, _ = make_case(tmp_path, "case", 9 * DAY)
     (folder / retention.STATE_FILE).write_text("broken json")
     assert retention._candidate(folder) is None
+
+
+def test_noop_cleanup_explains_why_nothing_was_moved(tmp_path, capsys):
+    make_case(tmp_path, "recent", 1)
+    assert retention.prune_cases(tmp_path, now=NOW, trash=tmp_path / "trash") == []
+    assert "checked 1 completed case(s); nothing eligible" in capsys.readouterr().out

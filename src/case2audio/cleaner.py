@@ -170,8 +170,14 @@ def clean_markdown(markdown: str, options: CleanerOptions | None = None) -> str:
     # A cheer can split its emphasized letter and exclamation into separate Docling blocks.
     text = re.sub(r"\b(Give me an?)\s+([A-Z])\s*!", r"\1 \2!", text)
     text = re.sub(r"[ \t]+([!;])", r"\1", text)
+
     # Affiliation markers are useful on the cover but have no spoken meaning in a byline.
-    text = re.sub(r"(?m)^(BY[^\n]+)$", lambda m: re.sub(r"\s*[*†‡]+", "", m[0]), text)
+    def clean_byline(match: re.Match) -> str:
+        byline = re.sub(r"\s*[*†‡]+", "", match[0])
+        # OCR often renders a final dagger marker as an apostrophe after an uppercase surname.
+        return re.sub(r"(?<=[A-Z])['’]\s*$", "", byline)
+
+    text = re.sub(r"(?m)^(BY[^\n]+)$", clean_byline, text)
     # Older PDFs can lose a dash at an italic boundary around this common phrase.
     text = re.sub(r"\bquestions(?=what, how, and why\b)", "questions - ", text, flags=re.I)
     # Contact details add little to an audiobook but often contain awkward punctuation.

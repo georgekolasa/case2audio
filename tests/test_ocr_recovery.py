@@ -4,6 +4,7 @@ from unittest.mock import Mock
 import pytest
 
 from case2audio import extractor
+from case2audio.ocr_recovery import polish_ocr_narration
 from case2audio.quality import ExtractionSignals
 
 
@@ -95,3 +96,25 @@ def test_currency_suffix_requires_explicit_high_confidence_image_evidence(
     )
     recover_currency_suffixes(SimpleNamespace(texts=[item]), "unused.pdf")
     assert item.text == expected
+
+
+def test_ocr_polish_repairs_verified_narration_forms():
+    text = (
+        "CCR evaluates projects. " * 15
+        + "A 40year veteran discussed CR's chocolate business near Champs - Elysées. "
+        + "It cost € 29.5 M. and sold for €55M. in year 10-therefore it mattered.\n\n"
+        + "This is a long paragraph that ends without punctuation because OCR dropped it " * 2
+    ).strip()
+    polished = polish_ocr_narration(text)
+    assert "40-year" in polished
+    assert "CCR's chocolate business" in polished
+    assert "Champs-Élysées" in polished
+    assert "€29.5 million" in polished
+    assert "€55 million" in polished
+    assert "year 10 - therefore" in polished
+    assert polished.endswith("it.")
+
+
+def test_ocr_polish_does_not_guess_from_weak_acronym_evidence():
+    text = "CCR appears twice. CCR is not dominant. CR's separate meaning stays."
+    assert "CR's separate" in polish_ocr_narration(text)

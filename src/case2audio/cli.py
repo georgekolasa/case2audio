@@ -179,6 +179,15 @@ def _handle_make(args: argparse.Namespace) -> int:
                     retention.complete_case(args.output_dir, pdf.stem, retention_token, parts)
                 except (OSError, ValueError) as exc:
                     print(f"WARNING: Could not record audio completion: {exc}", file=sys.stderr)
+                else:
+                    # Recheck immediately so a later worker timeout cannot postpone cleanup.
+                    try:
+                        retention.prune_cases(args.output_dir)
+                    except OSError as exc:
+                        print(
+                            f"WARNING: Local cleanup skipped: {exc}. Downloaded audio is safe.",
+                            file=sys.stderr,
+                        )
             except Exception as exc:
                 failures.append(f"{pdf.name}: {exc}")
                 print(f"Audio failed: {pdf.name}: {exc}", file=sys.stderr, flush=True)

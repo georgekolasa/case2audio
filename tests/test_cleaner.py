@@ -1,6 +1,12 @@
 from case2audio.cleaner import CleanerOptions, clean_markdown
 
 
+def test_ocr_dagger_apostrophe_is_removed_from_uppercase_byline():
+    assert clean_markdown("BY PAUL INGRAM AND DANIEL WOLFENZON'") == (
+        "BY PAUL INGRAM AND DANIEL WOLFENZON\n"
+    )
+
+
 def test_cleaner_removes_furniture_and_markdown() -> None:
     markdown = """# Useful title
 

@@ -1,6 +1,40 @@
 """Small image-backed repairs for full-page OCR, never guesses from corrupt PDF text."""
 
 import re
+from collections import Counter
+
+
+def polish_ocr_narration(text: str) -> str:
+    """Repair conservative OCR forms that are clear from repetition or punctuation."""
+    text = re.sub(r"\b(\d{1,3})year\b", r"\1-year", text, flags=re.I)
+    text = re.sub(r"\bChamps\s+-\s+Elys[ée]es\b", "Champs-Élysées", text, flags=re.I)
+    # Full-page OCR often renders prose dashes inconsistently or glues them to discourse words.
+    text = re.sub(r"\s*[–—]\s*", " - ", text)
+    text = re.sub(
+        r"(?<=[A-Za-z0-9])-\s*(?=(?:say|therefore|an\s+age-old)\b)",
+        " - ",
+        text,
+        flags=re.I,
+    )
+    # Currency plus M is unambiguously millions and sounds clearer when expanded.
+    text = re.sub(r"([€£$])\s*(\d+(?:\.\d+)?)\s*M\b\.?", r"\1\2 million", text)
+
+    # Recover a one-letter-damaged possessive only when the full acronym dominates the document.
+    acronyms = Counter(re.findall(r"\b[A-Z]{3,5}\b", text))
+    for acronym, count in acronyms.items():
+        if count < 15:
+            continue
+        for shorter in {acronym[:index] + acronym[index + 1 :] for index in range(len(acronym))}:
+            pattern = rf"\b{re.escape(shorter)}(['’]s)\b"
+            if len(re.findall(pattern, text)) == 1:
+                text = re.sub(pattern, lambda match, full=acronym: full + match.group(1), text)
+
+    paragraphs = text.split("\n\n")
+    for index, paragraph in enumerate(paragraphs):
+        # A long OCR prose block ending in a bare word almost certainly lost its final period.
+        if len(paragraph) >= 100 and re.search(r"[A-Za-z0-9)]$", paragraph):
+            paragraphs[index] = paragraph + "."
+    return "\n\n".join(paragraphs)
 
 
 def recover_currency_suffixes(document, path) -> int:

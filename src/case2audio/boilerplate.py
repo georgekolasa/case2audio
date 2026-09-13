@@ -42,6 +42,13 @@ def strip_publishing_boilerplate(markdown: str) -> str:
         original = paragraph
         flat = re.sub(r"\s+", " ", paragraph).strip()
         normalized = flat
+        # These standalone publisher marks are useful visually but add nothing to narration.
+        if re.fullmatch(
+            r"(?:Columbia Business School|CaseWorks|AT THE VERY CENTER OF BUSINESS[™®]?)",
+            flat,
+            re.I,
+        ):
+            continue
         # Remove cover metadata before paragraph joining can attach the next page's prose.
         if re.fullmatch(r"ID\s*#\s*\S+", flat, re.I):
             continue

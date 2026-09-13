@@ -67,3 +67,8 @@ def test_ocr_publishing_notices_leave_adjacent_case_prose():
         "Cases may contain fictionalized elements. The budget is €75 million."
     )
     assert clean_markdown(text) == "The budget is €75 million.\n"
+
+
+def test_standalone_case_publisher_branding_is_not_narrated():
+    text = "Columbia Business School\n\nAT THE VERY CENTER OF BUSINESS™\n\nCaseWorks\n\nCase title"
+    assert clean_markdown(text) == "Case title\n"

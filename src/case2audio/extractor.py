@@ -130,6 +130,10 @@ def extract_pdf(
         narration_markdown,
         CleanerOptions(table_mode=table_mode, extra_drop_patterns=extra_drop_patterns),
     )
+    if _force_ocr:
+        from .ocr_recovery import polish_ocr_narration
+
+        narration = polish_ocr_narration(narration)
     signals = replace(
         signals, redacted_text_items=len(redactions.hidden_texts), full_page_ocr=_force_ocr
     )

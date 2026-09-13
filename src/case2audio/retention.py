@@ -118,21 +118,15 @@ def _candidate(folder: Path):
         if any(not p.resolve().is_relative_to(folder.resolve()) for p in audio):
             return None
     else:
-        # Older versions had no completion record. Require every expected, numbered MP3 part.
+        # Older versions used several folder/file naming schemes. The expected part count,
+        # nonempty files, and absence of partials prove the legacy download completed.
         from .polly import split_for_polly
 
         count = len(split_for_polly((folder / "narration.txt").read_text()))
         if count == 0:
             return None
-        named = folder / f"{folder.name} Case"
-        audio = [
-            named
-            / (f"{folder.name}Case.mp3" if count == 1 else f"{folder.name}Case-part-{i:03d}.mp3")
-            for i in range(1, count + 1)
-        ]
-        if not all(p.is_file() for p in audio):
-            audio = [folder / "audio" / f"part-{i:03d}.mp3" for i in range(1, count + 1)]
-        if not all(p.is_file() for p in audio):
+        audio = sorted(folder.rglob("*.mp3"))
+        if len(audio) != count:
             return None
         completed = max(p.stat().st_mtime for p in audio)
     if any(not p.is_file() or p.stat().st_size <= 0 for p in audio):
@@ -164,4 +158,9 @@ def prune_cases(root: Path, *, now: float | None = None, trash: Path | None = No
             shutil.move(str(folder), str(target))
             moved.append(target)
             print(f"Local cleanup: moved {folder.name} to Trash (older than 2 days).", flush=True)
+        if not moved:
+            print(
+                f"Local cleanup: checked {len(candidates)} completed case(s); nothing eligible.",
+                flush=True,
+            )
     return moved

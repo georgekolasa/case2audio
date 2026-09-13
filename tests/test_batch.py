@@ -155,10 +155,11 @@ def test_invalid_worker_limit_fails_before_aws(batch):
 @pytest.mark.parametrize("fails", [False, True])
 def test_cleanup_runs_before_extraction_even_if_downloads_fail(batch, monkeypatch, fails):
     def check_start(root):
-        batch.extract.assert_not_called()
-        batch.synthesize.assert_not_called()
-        for pdf in batch.pdfs:
-            assert retention._read_state(root / pdf.stem)["status"] == "running"
+        # Only the first call is the startup check; later calls follow successful downloads.
+        if not batch.extract.called:
+            batch.synthesize.assert_not_called()
+            for pdf in batch.pdfs:
+                assert retention._read_state(root / pdf.stem)["status"] == "running"
 
     cleanup = Mock(side_effect=check_start)
     monkeypatch.setattr(retention, "prune_cases", cleanup)
@@ -177,6 +178,8 @@ def test_cleanup_runs_before_extraction_even_if_downloads_fail(batch, monkeypatc
 
         batch.synthesize.side_effect = downloaded
         assert cli._handle_make(batch.args) == 0
-        cleanup.assert_called_once_with(batch.args.output_dir)
+        # Once at startup, then once after each successful download.
+        assert cleanup.call_count == 3
+        assert all(call.args == (batch.args.output_dir,) for call in cleanup.call_args_list)
         for pdf in batch.pdfs:
             assert retention._read_state(batch.args.output_dir / pdf.stem)["status"] == "complete"

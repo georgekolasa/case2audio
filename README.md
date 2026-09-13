@@ -76,7 +76,10 @@ Completion timestamps are recorded in each case's `.audio-state.json`. Failed/in
 runs, narration-only folders, and nested review folders are left alone. Older outputs without
 a completion record qualify only when all expected MP3 parts exist; their audio modification
 times provide the age. Recent edits also protect a folder for 48 hours. Separate `make-audio`
-processes coordinate cleanup and cannot run the same case simultaneously.
+processes coordinate cleanup and cannot run the same case simultaneously. Cleanup is checked
+again after every successful download, so another PDF timing out cannot postpone it. Legacy
+folders count when their narration has exactly the expected number of complete, nonempty MP3s,
+regardless of the older audio-folder naming scheme. The terminal always reports the check.
 
 S3 audio uses the PDF name: `bb.pdf` becomes `s3://polly-gsk/case2audio/bb.mp3` and
 `sfn.pdf` becomes `s3://polly-gsk/case2audio/sfn.mp3`. Longer documents use `bb-part-001.mp3`,

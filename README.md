@@ -419,9 +419,13 @@ These checks catch missing introductory prose and explanatory footnotes, false t
 leaked citations, damaged words, and broken figure handling. They are skipped unless that
 environment variable is set; CI still works without personal PDFs.
 
-CI runs the fast unit tests plus the small synthetic end-to-end extraction. A fresh runner may
-populate Docling's model cache, but tests never call AWS; Polly tests use fakes, so pull requests
-cannot create paid synthesis tasks.
+GitHub Actions runs are **manual only** to save Actions minutes. Run the commands above locally;
+pushes and pull requests do not start tests. To run on GitHub, use **Actions → CI → Run workflow**.
+To restore automatic runs, uncomment `push:` and `pull_request:` under `on:` in
+`.github/workflows/ci.yml`.
+
+Manual CI runs the fast unit tests plus the small synthetic end-to-end extraction. A fresh runner
+may populate Docling's model cache, but tests never call AWS; Polly tests use fakes.
 
 ## Reference docs
 

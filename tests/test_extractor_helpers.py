@@ -237,7 +237,7 @@ def test_small_body_diagram_is_marked_and_its_loose_labels_are_removed():
     assert removed == 2
     notes, count = _visual_blocks(document, pictures)
     assert count == 1
-    assert notes[0].text == "Figure omitted. See PDF page 1."
+    assert notes[0].text == "Figure omitted page 1."
 
 
 def test_small_margin_logo_is_not_treated_as_content():

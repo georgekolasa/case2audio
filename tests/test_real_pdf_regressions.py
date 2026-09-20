@@ -33,7 +33,7 @@ def test_walmart_retains_prose_and_explanations(extracted):
     assert not re.search(r"[.!?]['\" ]*\s+(?:7|12|24|28|66)\b", text)
     assert not re.search(r"Source\s*:|Econometrica|Harvard Business Publishing|Stores, Inc.", text)
     for page in (2, 4, 6, 9, 11):
-        assert f"Table omitted. See PDF page {page}." not in text
+        assert f"Table omitted page {page}." not in text
     report = (extracted / "Walmart/debug/quality-report.txt").read_text()
     assert "DAMAGED_SENTENCE" in report  # The source itself is incomplete; do not invent words.
     assert "POSSIBLE_INLINE_CITATIONS" not in report
@@ -56,6 +56,6 @@ def test_sfn_keeps_definitions_and_page_continuations(extracted):
     assert "Explanatory note: This model of competition" in text
     assert "price of its products" in text
     assert "other carriers by relying" in text
-    assert "Figure omitted. See PDF page 11." in text
+    assert "Figure omitted page 11." in text
     assert "A TAXONOMY OF VALUE-BASED STRATEGIES" in text
     assert not re.search(r"[\ue000-\uf8ff]|Nvidia VIDIA", text)

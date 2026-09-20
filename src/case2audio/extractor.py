@@ -431,9 +431,9 @@ def _table_blocks(document, table_mode: str) -> tuple[list[TextBlock], int, int]
             title = _table_title(table)
             # A generic first-column header sounds worse than no title; nearby captions remain.
             if _is_generic_table_title(title):
-                text = f"Table omitted. See PDF page {page_number}."
+                text = f"Table omitted page {page_number}."
             else:
-                text = f"Table omitted: {title}. See PDF page {page_number}."
+                text = f"Table omitted: {title}, page {page_number}."
             omitted += 1
 
         blocks.append(_block_from_item(document, table, text=text, label="note"))
@@ -532,6 +532,7 @@ def _is_generic_table_title(title: str) -> bool:
         "region",
         "style",
         "supplier",
+        "untitled table",
         "year",
     }
 
@@ -600,6 +601,6 @@ def _visual_blocks(document, pictures=None) -> tuple[list[TextBlock], int]:
         count = len(pictures)
         page_number = first.prov[0].page_no
         noun = "Figure" if count == 1 else "Figures"
-        text = f"{noun} omitted. See PDF page {page_number}."
+        text = f"{noun} omitted page {page_number}."
         blocks.append(_block_from_item(document, first, text=text, label="note"))
     return blocks, sum(len(pictures) for pictures in substantial_by_page.values())

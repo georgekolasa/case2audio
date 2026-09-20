@@ -92,6 +92,17 @@ def test_contact_email_is_removed_without_joining_the_next_section() -> None:
     assert result == "The author teaches negotiation.\n\nSidebars\n"
 
 
+def test_cleaner_removes_url_only_citations_and_keeps_inline_context() -> None:
+    text = clean_markdown(
+        "http://example.test/report.pdf (last viewed on July 12, 2010).\n\n"
+        "The source is https://example.test/report.pdf."
+    )
+
+    assert "http" not in text
+    assert "last viewed" not in text
+    assert text == "The source is the linked source.\n"
+
+
 def test_cleaner_removes_misclassified_footer_and_repeated_byline() -> None:
     markdown = """# TechPulse Labs Case
 

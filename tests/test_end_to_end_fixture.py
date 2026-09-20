@@ -26,8 +26,8 @@ def test_synthetic_pdf_runs_through_the_complete_extraction_pipeline():
     # The two table policies and figure policy now run through real Docling objects.
     assert "Table contents." in text
     assert "Expand Open two stores." in text
-    assert "Table omitted. See PDF page 2." in text
-    assert "Figure omitted. See PDF page 2." in text
+    assert "Table omitted page 2." in text
+    assert "Figure omitted page 2." in text
     assert result.quality_report.findings
     assert result.quality_report.blocking == ()
     report = result.quality_report.render()

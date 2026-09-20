@@ -31,6 +31,12 @@ _TABLE_DIVIDER_RE = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$")
 _TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
 _PAGE_NUMBER_RE = re.compile(r"^\s*(?:page\s+)?\d{1,3}\s*$", re.IGNORECASE)
 _RUNNING_FOOTER_RE = re.compile(r"^page\s+\d+\s*\|\s*.+$", re.IGNORECASE)
+# URLs make poor narration; this stops the voice from spelling out web addresses.
+_URL_RE = re.compile(r"(?:https?://|www\.)[^\s<>()]+", re.IGNORECASE)
+# Access dates only describe a URL citation, so omit them with the address.
+_URL_ACCESS_NOTE_RE = re.compile(
+    r"\s*\((?:last\s+)?(?:viewed|accessed|retrieved)(?:\s+on)?[^)]*\)", re.IGNORECASE
+)
 # A private-use marker survives whitespace cleanup and preserves deliberate spoken breaks.
 _HARD_BREAK = "\ue000"
 
@@ -65,7 +71,7 @@ def clean_markdown(markdown: str, options: CleanerOptions | None = None) -> str:
     in_intro = True
     in_fenced_block = False
     for raw_line in text.splitlines():
-        line = raw_line.strip()
+        line = _strip_spoken_urls(raw_line.strip())
 
         # Code fences and their contents are usually extraction artifacts in business PDFs.
         if line.startswith("```"):
@@ -200,6 +206,27 @@ def clean_markdown(markdown: str, options: CleanerOptions | None = None) -> str:
     text = re.sub(r" *\n *", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip() + "\n"
+
+
+def _strip_spoken_urls(line: str) -> str:
+    """Drop URL-only citations and replace URLs embedded in otherwise useful prose."""
+
+    if not _URL_RE.search(line):
+        return line
+
+    # A bare link plus its access date carries no case content worth narrating.
+    without_url = _URL_ACCESS_NOTE_RE.sub("", _URL_RE.sub("", line))
+    if not without_url.strip(" \t.,;:()[]{}-"):
+        return ""
+
+    # Preserve a surrounding explanation while preventing a voice from spelling the address.
+    # Keep sentence punctuation because the URL matcher intentionally consumes it.
+    def replacement(match: re.Match[str]) -> str:
+        url = match.group()
+        punctuation = url[len(url.rstrip(".,;:!?")) :]
+        return "the linked source" + punctuation
+
+    return _URL_ACCESS_NOTE_RE.sub("", _URL_RE.sub(replacement, line))
 
 
 def _strip_markdown_emphasis(line: str) -> str:

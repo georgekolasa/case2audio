@@ -1,4 +1,4 @@
-from threading import Barrier
+from threading import Barrier, Event
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -143,6 +143,35 @@ def test_successful_running_job_is_downloaded_after_another_fails(batch, capsys)
     with pytest.raises(Case2AudioError, match="bb.pdf: Polly failed"):
         cli._handle_make(batch.args)
     assert "Audio ready: sfn.pdf" in capsys.readouterr().out
+
+
+def test_local_failure_explains_that_an_earlier_polly_task_is_still_finishing(batch, capsys):
+    report = assess_narration("Case text.", signals=ExtractionSignals())
+    release_first_task = Event()
+
+    def fail_second_extraction(*_args, **_kwargs):
+        # Keep the first paid task pending until the second PDF reaches its local gate.
+        release_first_task.set()
+        raise Case2AudioError("Narration failed the pre-Polly quality gate")
+
+    def finish_after_local_failure(*_args, **_kwargs):
+        release_first_task.wait(timeout=3)
+        return []
+
+    def extract_or_fail(pdf, **_kwargs):
+        if pdf.name == "bb.pdf":
+            return SimpleNamespace(narration="bb", quality_report=report)
+        return fail_second_extraction()
+
+    batch.extract.side_effect = extract_or_fail
+    batch.synthesize.side_effect = finish_after_local_failure
+
+    with pytest.raises(Case2AudioError, match="sfn.pdf"):
+        cli._handle_make(batch.args)
+
+    assert "Local processing stopped; waiting for 1 already-submitted Polly task(s)" in (
+        capsys.readouterr().out
+    )
 
 
 def test_invalid_worker_limit_fails_before_aws(batch):

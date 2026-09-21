@@ -103,6 +103,21 @@ def test_cleaner_removes_url_only_citations_and_keeps_inline_context() -> None:
     assert text == "The source is the linked source.\n"
 
 
+def test_cleaner_removes_private_use_icon_bullets_but_keeps_list_content() -> None:
+    text = clean_markdown(
+        "- \uf0b7 Customers reduce inventory.\n\n\uf0b7 Delivery reliability improves."
+    )
+
+    assert "\uf0b7" not in text
+    assert text == "Customers reduce inventory.\n\nDelivery reliability improves.\n"
+
+
+def test_cleaner_expands_circa_before_a_currency_amount() -> None:
+    assert clean_markdown("Estimated savings c.$500 per container.") == (
+        "Estimated savings approximately $500 per container.\n"
+    )
+
+
 def test_cleaner_removes_misclassified_footer_and_repeated_byline() -> None:
     markdown = """# TechPulse Labs Case
 

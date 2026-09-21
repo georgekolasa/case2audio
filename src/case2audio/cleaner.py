@@ -27,6 +27,8 @@ _LINK_RE = re.compile(r"\[([^]]+)]\([^)]*\)")
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+")
 _LIST_RE = re.compile(r"^\s*(?:(?:[-*+]\s*)+|\d+[.)]\s+)")
+# Some PDFs encode a normal bullet as this private-use icon-font glyph.
+_ICON_BULLET_RE = re.compile(r"^\s*(?:[-*+]\s*)?[\uf0b7\u2022]\s*")
 _TABLE_DIVIDER_RE = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$")
 _TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
 _PAGE_NUMBER_RE = re.compile(r"^\s*(?:page\s+)?\d{1,3}\s*$", re.IGNORECASE)
@@ -101,6 +103,8 @@ def clean_markdown(markdown: str, options: CleanerOptions | None = None) -> str:
             line += _HARD_BREAK
 
         line = _HEADING_RE.sub("", line)
+        # Strip the broken marker before generic Markdown list cleanup leaves it behind.
+        line = _ICON_BULLET_RE.sub("", line)
         line = _LIST_RE.sub("", line)
         line = _strip_markdown_emphasis(line)
 
@@ -178,6 +182,8 @@ def clean_markdown(markdown: str, options: CleanerOptions | None = None) -> str:
     # A cheer can split its emphasized letter and exclamation into separate Docling blocks.
     text = re.sub(r"\b(Give me an?)\s+([A-Z])\s*!", r"\1 \2!", text)
     text = re.sub(r"[ \t]+([!;])", r"\1", text)
+    # In financial exhibits, "c.$500" means circa $500 and sounds wrong if spoken literally.
+    text = re.sub(r"\bc\.\s*(?=[$€£]\d)", "approximately ", text, flags=re.IGNORECASE)
     # Currency symbols are spoken more reliably when attached to their amount.
     text = re.sub(r"([$€£])\s+(?=\d)", r"\1", text)
     # Docling occasionally invents a full stop at a line break inside this construction.

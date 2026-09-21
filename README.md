@@ -39,6 +39,8 @@ number of characters submitted for that part, for example:
 [16:15:25 EDT] [sfn.pdf] Polly is processing part 1/1 (52,536 characters; task ...).
 ```
 
+**Watch active Polly tasks:** [Open the Amazon Polly synthesis task console (us-east-1)](https://us-east-1.console.aws.amazon.com/polly/home/SynthesisTasks?region=us-east-1).
+
 That's the normal command. No virtualenv activation or AWS flags needed. Defaults: Matthew,
 Generative, and no OCR for selectable-text PDFs. AWS bucket, region, and profile come from
 `.case2audio.env`.

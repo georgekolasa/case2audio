@@ -32,7 +32,9 @@ def scan_visual_redactions(pdf_path: Path) -> RedactionScan:
         for page in pdf:
             text_page = page.get_textpage()
             try:
-                objects = list(page.get_objects(textpage=text_page))
+                # Nested Form XObjects report form-local bounds that cannot safely be compared
+                # with page text bounds. Scan only top-level objects until transforms are tracked.
+                objects = list(page.get_objects(max_depth=1, textpage=text_page))
                 boxes = [
                     obj.get_bounds()
                     for obj in objects

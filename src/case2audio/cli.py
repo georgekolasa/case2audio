@@ -223,6 +223,13 @@ def _handle_make(args: argparse.Namespace) -> int:
             pending[future] = pdf
 
         # Already submitted jobs can still succeed; download them even if another PDF failed.
+        if failures and pending:
+            # A later local failure must not abandon paid Polly tasks without downloading them.
+            print(
+                f"Local processing stopped; waiting for {len(pending)} already-submitted "
+                "Polly task(s) to finish...",
+                flush=True,
+            )
         while pending:
             collect(block=True)
     try:

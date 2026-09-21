@@ -10,6 +10,7 @@ from case2audio.errors import Case2AudioError
 from case2audio.polly import (
     PollyOptions,
     named_audio_key,
+    polly_console_url,
     s3_key_from_output_uri,
     split_for_polly,
     synthesize_to_directory,
@@ -67,6 +68,13 @@ def test_s3_key_supports_both_aws_url_styles() -> None:
         )
         == "jobs/a.123.mp3"
     )
+
+
+def test_polly_console_url_uses_the_selected_region() -> None:
+    assert polly_console_url("us-east-1") == (
+        "https://us-east-1.console.aws.amazon.com/polly/home/SynthesisTasks?region=us-east-1"
+    )
+    assert polly_console_url(None) == "https://console.aws.amazon.com/polly/home/SynthesisTasks"
     assert (
         s3_key_from_output_uri(
             "https://example-bucket.s3.us-east-2.amazonaws.com/jobs/a.123.mp3",
@@ -168,7 +176,7 @@ def test_synthesis_submits_waits_and_downloads(tmp_path: Path, capsys) -> None:
     parts = synthesize_to_directory(
         "A short case.",
         tmp_path,
-        PollyOptions(bucket="example", poll_seconds=0, timeout_seconds=1),
+        PollyOptions(bucket="example", region="us-east-1", poll_seconds=0, timeout_seconds=1),
         session=session,
         label="bb.pdf",
     )
@@ -195,6 +203,7 @@ def test_synthesis_submits_waits_and_downloads(tmp_path: Path, capsys) -> None:
     progress = capsys.readouterr().out
     assert "Connecting to Amazon Polly (Matthew, generative)" in progress
     assert "Submitting 1 audio part to Polly" in progress
+    assert "Watch Polly tasks: https://us-east-1.console.aws.amazon.com/polly/home/" in progress
     assert "Polly is processing part 1/1 (13 characters; task task-123)" in progress
     assert "Polly finished part 1/1; downloading audio" in progress
     assert re.search(

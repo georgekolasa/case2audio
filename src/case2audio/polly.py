@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from .errors import Case2AudioError
 
@@ -163,6 +163,8 @@ def synthesize_to_directory(
         f"Submitting {len(chunks)} audio {part_word} to Polly; this can take several minutes.",
         label,
     )
+    # Give the user a clickable destination while AWS works quietly in the background.
+    _print_progress(f"Watch Polly tasks: {polly_console_url(options.region)}", label)
     output_dir.mkdir(parents=True, exist_ok=True)
     parts: list[AudioPart] = []
 
@@ -330,6 +332,19 @@ def named_audio_key(options: PollyOptions, label: str | None, index: int, total:
     if len(key.encode("utf-8")) > 1024:
         raise Case2AudioError("S3 audio filename is too long; shorten the PDF name or --prefix.")
     return key
+
+
+def polly_console_url(region: str | None) -> str:
+    """Link to the selected regional task list without guessing an unset SDK region."""
+
+    if not region:
+        return "https://console.aws.amazon.com/polly/home/SynthesisTasks"
+    # AWS region names are simple, but encoding keeps a malformed config value out of the URL.
+    escaped_region = quote(region, safe="-")
+    return (
+        f"https://{escaped_region}.console.aws.amazon.com/polly/home/SynthesisTasks"
+        f"?region={escaped_region}"
+    )
 
 
 def _print_progress(message: str, label: str | None = None) -> None:

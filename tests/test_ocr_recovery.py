@@ -115,6 +115,24 @@ def test_ocr_polish_repairs_verified_narration_forms():
     assert polished.endswith("it.")
 
 
+def test_ocr_polish_removes_attached_citations_without_changing_decimals():
+    text = (
+        "In 1991.1 The claim ended).4. A value of 1.2 remains. "
+        "Rates were 5.5%,76 and plans ended in 1995,14. "
+        "The factory, 38 Produced $2.6 billion 33 Today. A321.62. The note.6° Next."
+    )
+
+    polished = polish_ocr_narration(
+        text, citation_markers=frozenset({"1", "4", "14", "38", "76"})
+    )
+
+    assert polished == (
+        "In 1991. The claim ended). A value of 1.2 remains. "
+        "Rates were 5.5% and plans ended in 1995. The factory. Produced $2.6 billion Today. "
+        "A321. The note. Next."
+    )
+
+
 def test_ocr_polish_does_not_guess_from_weak_acronym_evidence():
     text = "CCR appears twice. CCR is not dominant. CR's separate meaning stays."
     assert "CR's separate" in polish_ocr_narration(text)

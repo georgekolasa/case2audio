@@ -13,7 +13,10 @@ _REFERENCE_HEADING = re.compile(
     re.I,
 )
 _NOTE_MARKER = re.compile(r"^\s*(?:\[?\d+\]?[.)]?|[ivxlcdm]+[.)]?|[*†‡]+)\s+")
-_SOURCE = re.compile(r"^sources?\s*:\s*", re.I)
+# Exhibit captions often put a decorative bullet before Source:, especially after OCR.
+_SOURCE_PREFIX = r"\s*(?:[·•▪◦]\s*)?sources?"
+_SOURCE = re.compile(rf"^{_SOURCE_PREFIX}\s*:\s*", re.I)
+_SOURCE_LABEL = re.compile(rf"^{_SOURCE_PREFIX}\s*:?$", re.I)
 _YEAR = re.compile(r"\b(?:18|19|20)\d{2}\b")
 _URL = re.compile(r"https?://\S+|www\.\S+", re.I)
 _EXPLANATION = re.compile(
@@ -83,13 +86,18 @@ def _clean_explanation(text: str) -> str:
             continue
         # A date alone is not a citation: require a quoted title plus source-like structure.
         quoted_title = re.search(r'[,;]\s*["“].+?["”]', sentence)
-        if quoted_title and _YEAR.search(sentence) and _citation_only(sentence):
+        if quoted_title and _YEAR.search(sentence) and is_citation_only(sentence):
             continue
         retained.append(sentence)
     return " ".join(retained).strip()
 
 
-def _citation_only(text: str) -> bool:
+def is_citation_only(text: str) -> bool:
+    """Return whether one detached note is only a source citation.
+
+    This stays conservative because OCR cleanup uses its marker numbers as evidence
+    before deleting flattened footnotes from otherwise real prose.
+    """
     text = _without_marker(text)
     # Favor retaining an explanation when classification is ambiguous.
     if _EXPLANATION.match(text):
@@ -136,7 +144,7 @@ def filter_citation_blocks(blocks: list[TextBlock]) -> CitationResult:
             ]
             citation_notes = (
                 text.casefold().rstrip(":") == "notes"
-                and sum(_citation_only(item) for item in next_texts) >= 2
+                and sum(is_citation_only(item) for item in next_texts) >= 2
             )
             if _REFERENCE_HEADING.fullmatch(text) or citation_notes:
                 reference_section = True
@@ -152,7 +160,7 @@ def filter_citation_blocks(blocks: list[TextBlock]) -> CitationResult:
             explanation = _explanation_tail(text)
             if explanation is None and block.label == "footnote":
                 candidate = _without_marker(text)
-                if _EXPLANATION.match(candidate) and not _citation_only(candidate):
+                if _EXPLANATION.match(candidate) and not is_citation_only(candidate):
                     explanation = _clean_explanation(candidate)
             if explanation:
                 if not explanation_header_added and reference_header is not None:
@@ -177,7 +185,7 @@ def filter_citation_blocks(blocks: list[TextBlock]) -> CitationResult:
             omitted += 1
             continue
         if source_continuation and (
-            _URL.fullmatch(text) or (source_needs_entry and _citation_only(text))
+            _URL.fullmatch(text) or (source_needs_entry and is_citation_only(text))
         ):
             # Only consume one split citation entry; following prose can also contain dates.
             source_needs_entry = False
@@ -192,7 +200,7 @@ def filter_citation_blocks(blocks: list[TextBlock]) -> CitationResult:
                 omitted += 1
                 explanations += 1
                 continue
-            if _citation_only(text):
+            if is_citation_only(text):
                 omitted += 1
                 continue
             # Retain definitions and caveats, without speaking their detached footnote markers.
@@ -215,7 +223,7 @@ def _join_source_labels(blocks: list[TextBlock]) -> list[TextBlock]:
     index = 0
     while index < len(blocks):
         block = blocks[index]
-        if re.fullmatch(r"sources?\s*:?", block.text.strip(), re.I):
+        if _SOURCE_LABEL.fullmatch(block.text):
             block = replace(block, text="Source:")
             if index + 1 < len(blocks):
                 following = blocks[index + 1]
@@ -223,7 +231,10 @@ def _join_source_labels(blocks: list[TextBlock]) -> list[TextBlock]:
                 if (
                     following.page == block.page
                     and following.label == "text"
-                    and (following.text.lstrip().startswith(":") or _citation_only(following.text))
+                    and (
+                        following.text.lstrip().startswith(":")
+                        or is_citation_only(following.text)
+                    )
                 ):
                     block = replace(block, text="Source: " + following.text.lstrip(" :"))
                     index += 1

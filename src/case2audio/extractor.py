@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .boilerplate import strip_publishing_boilerplate
-from .citations import filter_citation_blocks
+from .citations import filter_citation_blocks, is_citation_only
 from .cleaner import CleanerOptions, clean_markdown
 from .errors import Case2AudioError
 from .furniture import strip_margin_furniture
@@ -135,7 +135,10 @@ def extract_pdf(
     if _force_ocr:
         from .ocr_recovery import polish_ocr_narration
 
-        narration = polish_ocr_narration(narration)
+        narration = polish_ocr_narration(
+            narration,
+            citation_markers=_ocr_citation_markers(document, ContentLayer.BODY),
+        )
     signals = replace(
         signals, redacted_text_items=len(redactions.hidden_texts), full_page_ocr=_force_ocr
     )
@@ -151,6 +154,24 @@ def extract_pdf(
         document_json=scrub_hidden_values(document.export_to_dict(), redactions.hidden_texts),
         quality_report=quality_report,
     )
+
+
+def _ocr_citation_markers(document, _body_layer) -> frozenset[str]:
+    """Find marker numbers backed by detached, citation-shaped OCR notes."""
+
+    markers: set[str] = set()
+    items = getattr(document, "texts", ())
+    # The lightweight extractor tests provide only exported markdown, not Docling items.
+    try:
+        items = iter(items)
+    except TypeError:
+        return frozenset()
+    for item in items:
+        match = re.match(r"^\s*(\d{1,3})[.)]?\s+", item.text)
+        # Endnotes remain useful evidence even when Docling assigns them the wrong layer.
+        if match and is_citation_only(item.text):
+            markers.add(match.group(1))
+    return frozenset(markers)
 
 
 def write_extraction(

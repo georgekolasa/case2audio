@@ -109,6 +109,13 @@ def test_inline_source_keeps_following_metric_definition():
     assert [item.text for item in result.blocks] == ["ROIC is net income divided by capital."]
 
 
+def test_decorated_exhibit_source_line_is_omitted() -> None:
+    result = filter_citation_blocks([block("·Source: The Airline Monitor, May 2000 (deliveries).")])
+
+    assert result.blocks == []
+    assert result.omitted == 1
+
+
 def test_book_recommendation_is_citation_only():
     result = filter_citation_blocks(
         [

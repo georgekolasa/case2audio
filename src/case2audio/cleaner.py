@@ -39,6 +39,8 @@ _URL_RE = re.compile(r"(?:https?://|www\.)[^\s<>()]+", re.IGNORECASE)
 _URL_ACCESS_NOTE_RE = re.compile(
     r"\s*\((?:last\s+)?(?:viewed|accessed|retrieved)(?:\s+on)?[^)]*\)", re.IGNORECASE
 )
+# This final guard also catches source lines embedded in an omitted table's caption.
+_SOURCE_LINE_RE = re.compile(r"^(?:[·•▪◦]\s*)?sources?\s*:\s*.+$", re.IGNORECASE)
 # A private-use marker survives whitespace cleanup and preserves deliberate spoken breaks.
 _HARD_BREAK = "\ue000"
 
@@ -89,6 +91,8 @@ def clean_markdown(markdown: str, options: CleanerOptions | None = None) -> str:
             continue
         # Docling can mislabel a combined running footer as a real section heading.
         if _RUNNING_FOOTER_RE.fullmatch(_HEADING_RE.sub("", line)):
+            continue
+        if _SOURCE_LINE_RE.fullmatch(line):
             continue
         if any(pattern.search(line) for pattern in drop_patterns):
             continue

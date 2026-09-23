@@ -103,6 +103,14 @@ def test_cleaner_removes_url_only_citations_and_keeps_inline_context() -> None:
     assert text == "The source is the linked source.\n"
 
 
+def test_cleaner_removes_decorated_exhibit_source_lines() -> None:
+    text = clean_markdown(
+        "Exhibit 1 Aircraft Deliveries\n\n·Source: The Airline Monitor, May 2000 (deliveries)."
+    )
+
+    assert text == "Exhibit 1 Aircraft Deliveries\n"
+
+
 def test_cleaner_removes_private_use_icon_bullets_but_keeps_list_content() -> None:
     text = clean_markdown(
         "- \uf0b7 Customers reduce inventory.\n\n\uf0b7 Delivery reliability improves."

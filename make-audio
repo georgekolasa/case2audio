@@ -130,4 +130,5 @@ fi
 
 # Keep every generated job under this repository's ignored generated/ folder.
 cd "$repo_dir"
-exec "${command[@]}"
+# Prefer the checked-out source so normal use immediately includes local fixes.
+exec env PYTHONPATH="$repo_dir/src${PYTHONPATH:+:$PYTHONPATH}" "${command[@]}"

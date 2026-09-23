@@ -4,7 +4,7 @@ import re
 from collections import Counter
 
 
-def polish_ocr_narration(text: str) -> str:
+def polish_ocr_narration(text: str, *, citation_markers: frozenset[str] = frozenset()) -> str:
     """Repair conservative OCR forms that are clear from repetition or punctuation."""
     text = re.sub(r"\b(\d{1,3})year\b", r"\1-year", text, flags=re.I)
     text = re.sub(r"\bChamps\s+-\s+Elys[ée]es\b", "Champs-Élysées", text, flags=re.I)
@@ -18,6 +18,63 @@ def polish_ocr_narration(text: str) -> str:
     )
     # Currency plus M is unambiguously millions and sounds clearer when expanded.
     text = re.sub(r"([€£$])\s*(\d+(?:\.\d+)?)\s*M\b\.?", r"\1\2 million", text)
+
+    # OCR flattens raised footnotes into prose, e.g. "1991.1 The" or "claim).4.".
+    # Keep the original sentence mark, but remove only markers attached to a strong boundary.
+    # Decimal values such as 1.2 do not match because their period follows a digit.
+    def remove_ocr_citation(match: re.Match[str]) -> str:
+        anchor = match.group("anchor")
+        # OCR can turn the sentence stop before a footnote into a comma ("1995,14.").
+        if anchor.endswith("%,"):
+            return anchor[:-1]
+        if anchor.endswith(","):
+            return anchor[:-1] + "."
+        return anchor
+
+    citation_end = r"(?=(?:[ \t]+(?=[A-Z\"'])|\n{2,}|$))"
+    text = re.sub(
+        r"(?P<anchor>\b(?:18|19|20)\d{2}[.,]|(?<!\d\.\d)[.!?][\"')\]]?)"
+        rf"[ \t]*\d{{1,3}}[.,;:]?{citation_end}",
+        remove_ocr_citation,
+        text,
+    )
+    # A marker directly after a percentage has no separating space, unlike real prose values.
+    text = re.sub(
+        r"(?P<anchor>%[,]?)\d{1,3}[.,;:]?(?=[ \t]+[A-Za-z])",
+        remove_ocr_citation,
+        text,
+    )
+    if citation_markers:
+        # A detached citation page confirms this OCR run actually contains footnotes.
+        # OCR can insert a normal space before a raised marker after a financial value.
+        text = re.sub(
+            r"(?P<anchor>\b(?:million|billion|trillion|acres))[ \t]*\d{1,3}[.,;:]?"
+            r"(?=[ \t]+[A-Z])",
+            remove_ocr_citation,
+            text,
+            flags=re.I,
+        )
+        # A comma followed by a known note number and a new sentence is never spoken prose.
+        text = re.sub(
+            r"(?P<anchor>(?<=[A-Za-z)]),)[ \t]*\d{1,3}[.,;:]?"
+            r"(?=[ \t]+[A-Z])",
+            remove_ocr_citation,
+            text,
+        )
+
+        # OCR sometimes reads raised 40 and 60 as 4º and 6°. At a sentence boundary
+        # before fresh prose, those are citations, not degrees.
+        text = re.sub(
+            r"(?P<anchor>[.!?][\"')\]]?)[ \t]*\d{1,2}[º°](?=[ \t]+[A-Z])",
+            remove_ocr_citation,
+            text,
+        )
+
+    # A full stop followed by a question mark is a common OCR rendering of a lost footnote.
+    text = re.sub(r"\.\?(?=(?:[ \t]+[A-Z]|\n{2,}|$))", ".", text)
+
+    # Once a trailing marker is removed, OCR's original sentence dot can be duplicated.
+    text = re.sub(r"\.{2,}(?=(?:[ \t]+|\n|$))", ".", text)
 
     # Recover a one-letter-damaged possessive only when the full acronym dominates the document.
     acronyms = Counter(re.findall(r"\b[A-Z]{3,5}\b", text))

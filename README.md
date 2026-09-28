@@ -110,6 +110,15 @@ If you need to refresh the login manually:
 aws login --profile case2audio
 ```
 
+If that opens an AWS **400 Bad Request** page and the terminal appears stuck, press `Ctrl-C`.
+On that Vivaldi tab, open **Site info → Cookies and Site Data → Manage On-Device Site Data**.
+Delete only `signin.aws.amazon.com` and `us-east-2.signin.aws.amazon.com`, click **Done**,
+then rerun the original `./make-audio ...` command. This signs you out of AWS in Vivaldi.
+That creates a fresh one-time login URL; reloading the failed URL will not work. This can happen
+when AWS browser cookies outlive their server-side session. If Vivaldi still blocks the login,
+run `aws login --remote --profile case2audio` and paste the displayed authorization code into
+the terminal, then rerun `./make-audio ...`. The remote flow avoids the localhost callback.
+
 Use the profile from `.case2audio.env`. Bare `aws login` targets `default`, which may have
 unrelated access keys. Automated runs print the correct login command instead of opening a
 browser. Permission and network errors stop early with their actual cause.

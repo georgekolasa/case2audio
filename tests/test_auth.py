@@ -122,7 +122,7 @@ def test_failed_login_stops_without_retry_loop(aws_login):
     old, _, factory, login = aws_login
     old.client.return_value.get_caller_identity.side_effect = LoginRefreshRequired()
     login.side_effect = subprocess.CalledProcessError(1, "aws")
-    with pytest.raises(Case2AudioError, match="AWS login did not finish"):
+    with pytest.raises(Case2AudioError, match="clear its signin.aws.amazon.com site data"):
         auth.prepare_session(profile="case2audio", region=None)
     assert factory.call_count == 1
     assert login.call_count == 1

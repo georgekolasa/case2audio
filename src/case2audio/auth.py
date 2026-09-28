@@ -51,7 +51,10 @@ def prepare_session(*, profile: str | None, region: str | None) -> Any:
 
         print(
             f"AWS session expired. Opening browser login for profile {profile!r}.\n"
-            "Finish signing in; audio creation will continue automatically.",
+            "Finish signing in; audio creation will continue automatically.\n"
+            "If AWS shows 400 Bad Request, press Ctrl-C, clear site data for "
+            "signin.aws.amazon.com in your browser, then rerun the same make-audio command. "
+            "The old login URL cannot be reused.",
             flush=True,
         )
         try:
@@ -61,7 +64,11 @@ def prepare_session(*, profile: str | None, region: str | None) -> Any:
             session = boto3.Session(profile_name=profile)
             session.client("sts", region_name=region).get_caller_identity()
         except (OSError, subprocess.CalledProcessError) as login_exc:
-            raise Case2AudioError(f"AWS login did not finish. Retry: {recovery}") from login_exc
+            raise Case2AudioError(
+                f"AWS login did not finish. If the browser showed 400 Bad Request, "
+                "clear its signin.aws.amazon.com site data and rerun your make-audio command "
+                f"for a fresh login URL. Manual login: {recovery}"
+            ) from login_exc
         except Exception as login_exc:
             raise Case2AudioError(
                 f"AWS access still failed after login for profile {profile!r}: {login_exc}"

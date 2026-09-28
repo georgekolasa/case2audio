@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
@@ -18,6 +19,34 @@ from .errors import Case2AudioError
 
 # Leave headroom under Polly's 100,000 billed-character asynchronous limit.
 DEFAULT_CHUNK_SIZE = 95_000
+
+
+class PollyRequestPacer:
+    """Space batch requests across workers to stay below Polly's shared API limits."""
+
+    def __init__(self) -> None:
+        self._start_lock = Lock()
+        self._status_lock = Lock()
+        self._next_start = 0.0
+        self._next_status = 0.0
+
+    def wait_for_start(self) -> None:
+        # Generative StartSpeechSynthesisTask allows one call per second per account/region.
+        self._wait_for_slot(self._start_lock, "_next_start", 1.1)
+
+    def wait_for_status(self) -> None:
+        # Get/List task status share a ten-calls-per-second limit.
+        self._wait_for_slot(self._status_lock, "_next_status", 0.11)
+
+    def _wait_for_slot(self, lock: Lock, next_slot: str, spacing: float) -> None:
+        with lock:
+            now = time.monotonic()
+            delay = max(0.0, getattr(self, next_slot) - now)
+            if delay:
+                # Hold only this API's lock; starts never hold up status checks.
+                time.sleep(delay)
+            # Use the actual wake time so scheduling delays cannot bunch requests together.
+            setattr(self, next_slot, time.monotonic() + spacing)
 
 
 @dataclass(frozen=True)
@@ -132,6 +161,7 @@ def synthesize_to_directory(
     session: Any | None = None,
     label: str | None = None,
     clients: tuple[Any, Any] | None = None,
+    pacer: PollyRequestPacer | None = None,
 ) -> list[AudioPart]:
     """Submit, wait for, and download one or more Polly speech tasks."""
 
@@ -174,6 +204,8 @@ def synthesize_to_directory(
             part for part in (options.prefix.strip("/"), "_tasks", f"part-{index:03d}") if part
         )
         try:
+            if pacer is not None:
+                pacer.wait_for_start()
             response = polly.start_speech_synthesis_task(
                 Engine=options.engine,
                 OutputFormat=options.output_format,
@@ -198,6 +230,7 @@ def synthesize_to_directory(
             task_id,
             poll_seconds=options.poll_seconds,
             timeout_seconds=options.timeout_seconds,
+            pacer=pacer,
         )
         output_uri = task["OutputUri"]
         extension = "mp3" if options.output_format == "mp3" else options.output_format
@@ -381,11 +414,14 @@ def _wait_for_task(
     *,
     poll_seconds: float,
     timeout_seconds: float,
+    pacer: PollyRequestPacer | None = None,
 ) -> dict[str, Any]:
     """Poll with a deadline so a stuck AWS task cannot hang the CLI forever."""
 
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
+        if pacer is not None:
+            pacer.wait_for_status()
         task = polly.get_speech_synthesis_task(TaskId=task_id)["SynthesisTask"]
         status = task["TaskStatus"]
         if status == "completed":

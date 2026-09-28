@@ -20,10 +20,12 @@ Bare filenames default to `~/Downloads`, so this reads `~/Downloads/bb.pdf` and
 and `~/Documents/bb.pdf` or an absolute path uses that location. You can mix filenames and
 explicit paths in one command. Quote filenames containing spaces, e.g. `"my case.pdf"`.
 
-PDF extraction runs one at a time, but **up to two PDFs process through Polly concurrently**.
+PDF extraction runs one at a time, but **up to 20 PDFs process through Polly concurrently**.
 While Polly generates `bb.pdf`, the command extracts `sfn.pdf` and starts its audio job.
 Results stay separate in `generated/bb/` and `generated/sfn/`. Use `--jobs 1` after the PDFs
-for sequential processing, or `--jobs N` to change the concurrency limit.
+for sequential processing, or `--jobs N` (1-20) to change the concurrency limit. Polly requests
+are spaced to respect AWS's generative task and status-check rate limits. While audio jobs run,
+the terminal reports the running and waiting counts every 30 seconds.
 
 Login is checked once before the batch. List all PDFs before shared options, such as
 `--table-mode linearize`. All paths are checked up front; duplicate output names are rejected.
@@ -172,6 +174,7 @@ flowchart LR
         Text[narration.txt]
         Quality[Pre-Polly quality gate]
         Split[Polly-sized text chunks]
+        Pacer[Shared Polly request pacer]
         Download[Poll and download]
         Verify[Verify and atomically save download]
         MP3[Local MP3 parts]
@@ -195,7 +198,8 @@ flowchart LR
         Polly --> S3
     end
 
-    Split --> Polly
+    Split --> Pacer --> Polly
+    Pacer -. spaces status checks .-> Download
     Auth <--> STS
     Auth <--> Validate
     Split -. recheck voice .-> Validate
@@ -214,8 +218,10 @@ The responsibilities are deliberately separated:
   This local retention is separate from S3 cleanup and never touches the input PDFs.
 - Docling extraction and quality checks run sequentially on the main thread because of the native
   parser's threading constraints. A bounded worker pool overlaps Polly submission, polling, and
-  downloads for up to `--jobs` PDFs (default 2). Workers share Polly/S3 clients created on the
+  downloads for up to `--jobs` PDFs (default 20). Workers share Polly/S3 clients created on the
   main thread, so credential refresh is coordinated instead of racing the same cached token.
+  One shared pacer spaces task submissions and status checks across all workers; the CLI reports
+  running and waiting counts every 30 seconds while the batch waits.
   The SDK session preserves the AWS profile's login region; `CASE2AUDIO_REGION` selects only
   the service region for Polly, S3, and STS.
 - Corrupt embedded text triggers a single full-page OCR retry. Rejected PDF text is not reused

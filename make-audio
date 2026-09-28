@@ -11,7 +11,7 @@ usage() {
 Usage: ./make-audio [--ocr] [--dry-run] PDF [PDF ...] [case2audio make options]
 
 Turn one or more PDFs into separate narration text and Matthew Generative audio.
-List all PDFs before shared case2audio options. Up to two PDFs run through Polly at once.
+List all PDFs before shared case2audio options. Up to 20 PDFs run through Polly at once.
 Use --jobs 1 after the PDFs for sequential processing.
 Bare filenames are read from ~/Downloads. Use ./file.pdf for the current directory.
 

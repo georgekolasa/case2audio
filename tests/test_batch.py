@@ -64,6 +64,9 @@ def test_batch_preserves_order_and_separate_outputs_with_one_login(batch, capsys
     # Both workers must share exactly the same client pair and credential refresh lock.
     assert calls["bb"].kwargs["clients"] is calls["sfn"].kwargs["clients"]
     assert batch.session.client.call_count == 2
+    for call in batch.session.client.call_args_list:
+        assert call.kwargs["config"].max_pool_connections == batch.args.jobs
+        assert call.kwargs["config"].retries["mode"] == "standard"
     for pdf, write in zip(batch.pdfs, batch.write.call_args_list, strict=True):
         synth = calls[pdf.stem]
         assert write.args[1] == batch.args.output_dir / pdf.stem / "narration.txt"
@@ -110,6 +113,51 @@ def test_polly_jobs_overlap(batch):
     batch.synthesize.side_effect = synthesize
     assert cli._handle_make(batch.args) == 0
     assert batch.synthesize.call_count == 2
+
+
+def test_default_limit_allows_five_jobs_to_overlap(batch):
+    for name in ("third.pdf", "fourth.pdf", "fifth.pdf"):
+        pdf = batch.pdfs[0].with_name(name)
+        pdf.touch()
+        batch.args.pdfs.append(pdf)
+    all_started = Barrier(5)
+
+    def synthesize(*_args, **_kwargs):
+        # A two-job default would deadlock before the fifth worker starts.
+        all_started.wait(timeout=3)
+        return []
+
+    batch.synthesize.side_effect = synthesize
+    assert batch.args.jobs == 20
+    assert cli._handle_make(batch.args) == 0
+    assert batch.synthesize.call_count == 5
+    assert len({call.kwargs["pacer"] for call in batch.synthesize.call_args_list}) == 1
+
+
+def test_batch_reports_progress_while_jobs_are_still_running(batch, monkeypatch, capsys):
+    release = Event()
+    real_wait = cli.wait
+    reported = False
+
+    def wait_once_without_completion(futures, *, timeout, return_when):
+        nonlocal reported
+        if timeout == 30 and not reported:
+            reported = True
+            release.set()
+            return set(), set(futures)
+        return real_wait(futures, timeout=timeout, return_when=return_when)
+
+    def synthesize(*_args, **_kwargs):
+        release.wait(timeout=3)
+        return []
+
+    monkeypatch.setattr(cli, "wait", wait_once_without_completion)
+    batch.synthesize.side_effect = synthesize
+    assert cli._handle_make(batch.args) == 0
+    assert reported
+    assert "Batch progress: 2 audio job(s) running; 0 PDF(s) waiting to extract." in (
+        capsys.readouterr().out
+    )
 
 
 def test_failure_still_collects_other_running_job_and_skips_remaining(batch, capsys):
@@ -174,9 +222,10 @@ def test_local_failure_explains_that_an_earlier_polly_task_is_still_finishing(ba
     )
 
 
-def test_invalid_worker_limit_fails_before_aws(batch):
-    batch.args.jobs = 0
-    with pytest.raises(Case2AudioError, match="--jobs must be at least 1"):
+@pytest.mark.parametrize("invalid", [0, 21])
+def test_invalid_worker_limit_fails_before_aws(batch, invalid):
+    batch.args.jobs = invalid
+    with pytest.raises(Case2AudioError, match="--jobs must be between 1 and 20"):
         cli._handle_make(batch.args)
     batch.login.assert_not_called()
 

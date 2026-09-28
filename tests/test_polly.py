@@ -49,6 +49,26 @@ def test_default_wait_stops_after_25_minutes(monkeypatch):
         )
 
 
+def test_batch_pacer_spaces_separate_start_and_status_calls(monkeypatch):
+    clock = [100.0]
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(polly.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(polly.time, "sleep", sleep)
+    pacer = polly.PollyRequestPacer()
+
+    for _ in range(3):
+        pacer.wait_for_start()
+    for _ in range(3):
+        pacer.wait_for_status()
+
+    assert sleeps == pytest.approx([1.1, 1.1, 0.11, 0.11])
+
+
 def test_split_for_polly_respects_limit_and_order() -> None:
     text = "First paragraph.\n\n" + ("word " * 60) + "\n\nLast paragraph."
 
@@ -160,13 +180,17 @@ def test_shared_clients_do_not_create_a_second_credential_session(tmp_path, monk
     factory = Mock(side_effect=AssertionError("Worker must reuse the prepared clients"))
     monkeypatch.setattr(boto3, "Session", factory)
     session = FakeSession()
+    pacer = Mock()
     parts = synthesize_to_directory(
         "A short case.",
         tmp_path,
         PollyOptions(bucket="example"),
         clients=(session.polly, session.s3),
+        pacer=pacer,
     )
     assert parts[0].path.read_bytes() == b"fake mp3"
+    pacer.wait_for_start.assert_called_once_with()
+    pacer.wait_for_status.assert_called_once_with()
     factory.assert_not_called()
 
 

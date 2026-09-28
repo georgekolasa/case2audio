@@ -60,8 +60,8 @@ def build_parser() -> argparse.ArgumentParser:
     make.add_argument(
         "--jobs",
         type=int,
-        default=2,
-        help="Maximum PDFs processing through Polly at once (default: 2; use 1 for sequential).",
+        default=20,
+        help="Maximum PDFs processing through Polly at once (default: 20; range: 1-20).",
     )
     make.set_defaults(handler=_handle_make)
 
@@ -128,12 +128,19 @@ def _handle_speak(args: argparse.Namespace) -> int:
 
 
 def _handle_make(args: argparse.Namespace) -> int:
+    from botocore.config import Config
+
     from . import retention
     from .auth import prepare_session
-    from .polly import _validate_voice_engine, synthesize_to_directory
+    from .polly import (
+        PollyRequestPacer,
+        _print_progress,
+        _validate_voice_engine,
+        synthesize_to_directory,
+    )
 
-    if args.jobs < 1:
-        raise Case2AudioError("--jobs must be at least 1")
+    if not 1 <= args.jobs <= 20:
+        raise Case2AudioError("--jobs must be between 1 and 20")
     # Check the whole batch first, including output collisions on case-insensitive filesystems.
     outputs: set[str] = set()
     for pdf in args.pdfs:
@@ -149,12 +156,19 @@ def _handle_make(args: argparse.Namespace) -> int:
 
     # One login check covers the batch; SDK credentials can refresh during normal use.
     session = prepare_session(profile=args.profile, region=args.region)
+    # Keep enough pooled connections for downloads and retry unexpected AWS throttling.
+    client_config = Config(
+        max_pool_connections=args.jobs,
+        retries={"mode": "standard", "total_max_attempts": 5},
+    )
     # Build clients before starting threads. Shared clients share one credential refresh lock.
     clients = (
-        session.client("polly", region_name=args.region),
-        session.client("s3", region_name=args.region),
+        session.client("polly", region_name=args.region, config=client_config),
+        session.client("s3", region_name=args.region, config=client_config),
     )
     _validate_voice_engine(clients[0], _polly_options(args))
+    # All workers share one pacer because AWS limits these API calls across the account/region.
+    pacer = PollyRequestPacer()
     pending = {}
     failures: list[str] = []
     retention_token = retention.begin_batch(args.output_dir, [pdf.stem for pdf in args.pdfs])
@@ -164,10 +178,15 @@ def _handle_make(args: argparse.Namespace) -> int:
     except OSError as exc:
         print(f"WARNING: Local cleanup skipped: {exc}. Continuing audio creation.", file=sys.stderr)
 
-    def collect(*, block: bool) -> None:
+    def collect(*, block: bool, waiting: int = 0) -> None:
         if not pending:
             return
-        done, _ = wait(pending, timeout=None if block else 0, return_when=FIRST_COMPLETED)
+        done, _ = wait(pending, timeout=30 if block else 0, return_when=FIRST_COMPLETED)
+        if block and not done:
+            _print_progress(
+                f"Batch progress: {len(pending)} audio job(s) running; "
+                f"{waiting} PDF(s) waiting to extract."
+            )
         for future in done:
             pdf = pending.pop(future)
             try:
@@ -197,7 +216,7 @@ def _handle_make(args: argparse.Namespace) -> int:
         for index, pdf in enumerate(args.pdfs, start=1):
             collect(block=False)
             while len(pending) >= args.jobs and not failures:
-                collect(block=True)
+                collect(block=True, waiting=len(args.pdfs) - index + 1)
             if failures:
                 break
             print(f"Processing PDF {index}/{len(args.pdfs)}: {pdf.name}", flush=True)
@@ -219,6 +238,7 @@ def _handle_make(args: argparse.Namespace) -> int:
                 _polly_options(args),
                 label=pdf.name,
                 clients=clients,
+                pacer=pacer,
             )
             pending[future] = pdf
 

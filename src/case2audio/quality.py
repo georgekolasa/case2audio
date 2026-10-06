@@ -40,6 +40,7 @@ class ExtractionSignals:
     retained_explanatory_notes: int = 0
     removed_margin_blocks: int = 0
     removed_inline_markers: int = 0
+    removed_parenthetical_citations: int = 0
     repaired_source_words: int = 0
     repaired_source_numbers: int = 0
     repaired_source_forms: int = 0
@@ -107,6 +108,11 @@ def assess_narration(
     for count, code, description in (
         (signals.removed_margin_blocks, "MARGIN_TEXT_REMOVED", "page-margin blocks"),
         (signals.removed_inline_markers, "INLINE_CITATIONS_REMOVED", "confirmed raised citations"),
+        (
+            signals.removed_parenthetical_citations,
+            "AUTHOR_YEAR_CITATIONS_REMOVED",
+            "parenthetical author-year citations",
+        ),
     ):
         if count:
             findings.append(QualityFinding("INFO", code, f"Removed {count} {description}."))

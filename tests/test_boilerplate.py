@@ -72,3 +72,26 @@ def test_ocr_publishing_notices_leave_adjacent_case_prose():
 def test_standalone_case_publisher_branding_is_not_narrated():
     text = "Columbia Business School\n\nAT THE VERY CENTER OF BUSINESS™\n\nCaseWorks\n\nCase title"
     assert clean_markdown(text) == "Case title\n"
+
+
+def test_doi_and_journal_badge_keep_adjacent_case_prose():
+    text = (
+        "DOI: 10.1234/567890\n\n"
+        "2015, Vol. 10(6) 742–748 © The Author(s) 2015 "
+        "Reprints and permissions: publisher.example/permissions "
+        "DOI: 10.1234/567890 journal.example.com "
+        "experiences (e.g., living abroad)."
+    )
+    assert clean_markdown(text) == "experiences (e.g., living abroad).\n"
+    assert clean_markdown(text.replace("journal.example.com experiences", "U.S. experiences")) == (
+        "U.S. experiences (e.g., living abroad).\n"
+    )
+
+
+def test_doi_urls_are_omitted_but_doi_discussion_and_numbers_survive():
+    assert clean_markdown("https://doi.org/10.1234/567890\n\nThe DOI system began in 2000.") == (
+        "The DOI system began in 2000.\n"
+    )
+    assert clean_markdown("The identifier is 598513; the year is 2015.") == (
+        "The identifier is 598513; the year is 2015.\n"
+    )

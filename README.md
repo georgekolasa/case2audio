@@ -249,6 +249,10 @@ The responsibilities are deliberately separated:
   or definitions that share a source line. Explanatory footnotes are moved directly after the
   paragraph that references them. Author initials and publisher abbreviations do not create
   fake explanations, and an ordinary sentence with a comma and year is not treated as a citation.
+  After paragraph joining, a separate pass removes parenthetical author-year source clauses
+  while retaining explanatory clauses in the same parentheses and recording the removal count.
+  Ambiguous single names and organization labels require a matching author/year in an explicitly
+  headed reference list; clear multiple-author and `et al.` patterns do not require that match.
   Raw extraction remains available for comparison.
 - Smart exhibit handling checks table contents as well as dimensions. Numeric comparison tables
   receive short visual-review notices instead of long descriptions of omitted cells; narrow
@@ -304,7 +308,14 @@ placed immediately after their referring paragraph. Ambiguous footnotes are reta
 risking removal of useful case content. Mixed notes lose
 recognized interview-attribution, quoted bibliography, permission-reminder, and manuscript-editing
 sentences while retaining actual qualifications. Confirmed raised inline citations are removed;
-ordinary values such as `Firm 1`, `20%`, years, and exhibit numbers are preserved. Unconfirmed
+parenthetical author-year citations such as `(Smith, 2015; Jones et al., 2018)` are also removed,
+including citations split across pages. Mixed parentheses retain their explanatory text, such as
+`(relative to the national average; Smith, 2015)` becoming `(relative to the national average)`.
+Ambiguous labels such as `(New York, 2015)` are kept unless their author and year match an entry
+in a recognized reference list. Explanations, cross-references, and narrative attribution such as
+`Smith (2015) found...` remain intact. This may leave uncertain citations in PDFs without a
+usable bibliography rather than delete potentially useful detail.
+Ordinary values such as `Firm 1`, `20%`, years, and exhibit numbers are preserved. Unconfirmed
 markers may remain and trigger a review warning. Scanned PDFs without usable text geometry do
 not receive these source-confirmed repairs.
 
@@ -313,6 +324,8 @@ citation blocks and retained notes. Citation filtering always applies during PDF
 
 Recognized copyright headings, copyright notices (including `©` year ranges), editorial-version
 notices, teaching-use disclaimers, and reproduction-permission boilerplate are also omitted.
+Labeled DOIs, DOI links, DOI-bearing journal publication badges, corresponding-author contact
+blocks, and tiny cover production metadata rows are omitted too; adjacent article prose is kept.
 Cleanup removes notice sentences rather than whole sections, because PDF extraction can merge
 the next real paragraph into a notice. Ordinary discussion of copyright and licensing is kept;
 unfamiliar publisher wording may still need a targeted rule. Raw extraction retains the notices.

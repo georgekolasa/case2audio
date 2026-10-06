@@ -1,14 +1,124 @@
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from case2audio.citations import filter_citation_blocks
+from case2audio.citations import filter_citation_blocks, strip_parenthetical_citations
 from case2audio.reading_order import TextBlock
+
+# Synthetic references prove author/year matches without relying on any licensed PDF.
+AUTHOR_YEAR_REFERENCES = """## References
+- Smith, A. (2009). A study.
+- Smith, A. (2012). Another study.
+- Smith, A. (2014). A study.
+- Smith, A. (2015). A study.
+- Smith, A. (2015a). A study.
+- Immigration Policy Center. (2014). A report.
+- PBS. (2014). A report.
+- Policy Research Center. (2014). A report.
+- Ricci v. DeStefano, 129 S. Ct. 2658 (2009).
+"""
 
 
 def block(text, label="text", page=1):
     return TextBlock(text, label, page, 50, 600, 550, 500, 612, 792)
+
+
+@pytest.mark.parametrize(
+    "citation",
+    [
+        "Smith, 2009",
+        "Smith & Jones, 2014",
+        "Smith, Brown, & Jones, 2015",
+        "Benet-Martínez, Lee, & Leu, 2006",
+        "Jansen, Otten, & van der Zee, 2015",
+        "Smith et\u00a0 al., 2012",
+        "Immigration Policy Center, 2014",
+        "PBS, 2014",
+        "Smith, 2015a, 2015b",
+        "Smith, 2012, pp. 12–15",
+        "see Smith, 2015",
+        "Ricci v. DeStefano, 2009",
+        "Smith & Jones,\n\n2001",
+    ],
+)
+def test_author_year_citations_are_removed_without_damaging_the_sentence(citation):
+    text, count = strip_parenthetical_citations(
+        f"Teams perform better ({citation}), on average.",
+        reference_markdown=AUTHOR_YEAR_REFERENCES,
+    )
+    assert text == "Teams perform better, on average."
+    assert count == 1
+
+
+def test_multiple_and_mixed_citations_keep_explanations_and_dashes():
+    text, count = strip_parenthetical_citations(
+        "Trust improves (Smith, 2014; Jones & Brown,\n\n2001)-a useful outcome. "
+        "Pay rises (relative to the national average; Policy Research Center, 2014). "
+        "Groups benefit (e.g., immigrant communities; Lee et al., 2015).",
+        reference_markdown=AUTHOR_YEAR_REFERENCES,
+    )
+    assert text == (
+        "Trust improves - a useful outcome. "
+        "Pay rises (relative to the national average). "
+        "Groups benefit (e.g., immigrant communities)."
+    )
+    assert count == 4
+
+
+@pytest.mark.parametrize(
+    "aside",
+    [
+        "e.g., living abroad",
+        "i.e., premature consensus",
+        "often, though not always",
+        "from 2008 to 2015",
+        "May, 2015",
+        "FY, 2024",
+        "USD, 2024",
+        "sales rose, 2015 was a record year",
+        "20%, 2014",
+        "A + B, 2015",
+        "2015",
+        "the U.S. is the only country to do so",
+        "Annual Revenue, 2024",
+        "Revenue, 2024",
+        "New York, 2015",
+        "Smith, 2015, argues the opposite",
+        "see Smith, 2015, for a detailed explanation",
+        "see Exhibit 3",
+    ],
+)
+def test_explanatory_parentheses_dates_and_values_survive(aside):
+    original = f"Useful content ({aside}) continues."
+    assert strip_parenthetical_citations(
+        original, reference_markdown=AUTHOR_YEAR_REFERENCES
+    ) == (original, 0)
+
+
+def test_single_name_or_organization_needs_a_matching_reference_year():
+    text = "Evidence (Smith, 2015) differs from results (Smith, 2016) and data (ABC, 2024)."
+    assert strip_parenthetical_citations(text) == (text, 0)
+    assert strip_parenthetical_citations(text, reference_markdown=AUTHOR_YEAR_REFERENCES) == (
+        "Evidence differs from results (Smith, 2016) and data (ABC, 2024).", 1
+    )
+
+
+def test_ordinary_dated_body_prose_does_not_count_as_reference_evidence():
+    text = "Office opened (New York, 2015)."
+    assert strip_parenthetical_citations(
+        text, reference_markdown="## History\nNew York, 2015. The office opened."
+    ) == (text, 0)
+
+
+def test_removing_nested_citation_preserves_the_outer_explanation():
+    text, count = strip_parenthetical_citations(
+        "Helpful context (especially in mixed teams (Smith, 2015)) matters.",
+        reference_markdown=AUTHOR_YEAR_REFERENCES,
+    )
+    assert text == "Helpful context (especially in mixed teams) matters."
+    assert count == 1
 
 
 @pytest.mark.parametrize("heading", ["References", "Bibliography", "Works Cited", "Endnotes"])
@@ -167,6 +277,41 @@ def test_extraction_always_filters_citations(monkeypatch):
     filtered, signals = extractor._build_narration_markdown(document, "body", "smart")
     assert "Smith" not in filtered
     assert signals.omitted_citation_blocks == 2
+
+
+def test_extraction_strips_author_year_citations_after_page_joining(monkeypatch):
+    from docling import document_converter
+
+    from case2audio import extractor
+    from case2audio.quality import ExtractionSignals
+
+    source = (
+        "Teams considered more perspectives (Rivera & Chen,\n\n2019). "
+        "The benefit held (relative to baseline; Research Center, 2020)."
+    )
+    document = SimpleNamespace(
+        export_to_markdown=lambda **_: source + "\n\n## References\n"
+        "Research Center. (2020). A report.",
+        export_to_dict=lambda: {"text": source},
+    )
+    # Stub parsing, but exercise the real post-Docling cleanup and quality-report path.
+    monkeypatch.setattr(
+        document_converter,
+        "DocumentConverter",
+        lambda **_: SimpleNamespace(convert=lambda _: SimpleNamespace(document=document)),
+    )
+    monkeypatch.setattr(
+        extractor,
+        "_build_narration_markdown",
+        lambda *_args, **_kwargs: (source, ExtractionSignals()),
+    )
+    fixture = Path(__file__).parent / "fixtures" / "synthetic-case.pdf"
+    result = extractor.extract_pdf(fixture, use_ocr=False)
+    assert result.narration == (
+        "Teams considered more perspectives. The benefit held (relative to baseline).\n"
+    )
+    assert "Rivera & Chen" in result.markdown  # Debug sources remain reviewable.
+    assert "AUTHOR_YEAR_CITATIONS_REMOVED: Removed 2" in result.quality_report.render()
 
 
 def test_continued_reference_heading_does_not_resume_narrative():

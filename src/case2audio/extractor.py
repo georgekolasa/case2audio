@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .boilerplate import strip_publishing_boilerplate
-from .citations import filter_citation_blocks, is_citation_only
+from .citations import filter_citation_blocks, is_citation_only, strip_parenthetical_citations
 from .cleaner import CleanerOptions, clean_markdown
 from .errors import Case2AudioError
 from .furniture import strip_margin_furniture
@@ -132,6 +132,10 @@ def extract_pdf(
         narration_markdown,
         CleanerOptions(table_mode=table_mode, extra_drop_patterns=extra_drop_patterns),
     )
+    # Run after paragraph joining so a citation split across pages is recognized as one source.
+    narration, parenthetical_citations = strip_parenthetical_citations(
+        narration, reference_markdown=markdown
+    )
     if _force_ocr:
         from .ocr_recovery import polish_ocr_narration
 
@@ -140,7 +144,10 @@ def extract_pdf(
             citation_markers=_ocr_citation_markers(document, ContentLayer.BODY),
         )
     signals = replace(
-        signals, redacted_text_items=len(redactions.hidden_texts), full_page_ocr=_force_ocr
+        signals,
+        redacted_text_items=len(redactions.hidden_texts),
+        full_page_ocr=_force_ocr,
+        removed_parenthetical_citations=parenthetical_citations,
     )
     quality_report = assess_narration(
         narration,
@@ -295,12 +302,31 @@ def _build_narration_markdown(
 def _strip_front_matter(blocks: list[TextBlock]) -> tuple[list[TextBlock], int]:
     """Drop cover-page affiliations and acknowledgments without eating page-two prose."""
 
-    headings = re.compile(r"^(?:author affiliations?|acknowledg(?:e)?ments?)\s*:?$", re.I)
+    headings = re.compile(
+        r"^(?:author affiliations?|acknowledg(?:e)?ments?|corresponding author)\s*:?$", re.I
+    )
+    # Publisher production tags can be invisible microtext above the first-page title.
+    production_rows = [
+        block.top
+        for block in blocks
+        if block.page == 1
+        and block.bottom > block.page_height * 0.94
+        and block.top - block.bottom < 2
+        and block.text.strip().casefold() == "research-article"
+    ]
     output: list[TextBlock] = []
     active_page: int | None = None
     removed = 0
     for block in blocks:
         normalized = " ".join(block.text.split())
+        if (
+            block.page == 1
+            and block.top - block.bottom < 10
+            and any(abs(block.top - row) < 12 for row in production_rows)
+        ):
+            # Remove only the tiny metadata row, never numeric blocks elsewhere on the page.
+            removed += 1
+            continue
         # A named cover badge may be discovered after the article body and otherwise land
         # inside the page-one sentence that continues onto page two.
         if (

@@ -128,6 +128,35 @@ def test_front_matter_stops_at_the_next_page_without_a_heading():
     assert removed == 4
 
 
+def test_invisible_article_metadata_is_removed_only_from_its_cover_row():
+    blocks = [
+        _block("research-article", top=780, bottom=779.2),
+        _block("2015", top=780, bottom=779.2),
+        _block("598513", top=786, bottom=779),
+        _block("PPSXXX10.1234/567890", top=780, bottom=779.2),
+        _block("Short author label", top=780, bottom=779.2),
+        _block("Full article title", "section_header", top=680, bottom=650),
+        _block("2015", top=590, bottom=580),
+        _block("598513", page=2, top=786, bottom=779),
+    ]
+    kept, removed = _strip_front_matter(blocks)
+    assert kept == blocks[5:]
+    assert removed == 5
+
+
+def test_corresponding_author_contact_block_does_not_consume_page_two():
+    blocks = [
+        _block("Main introduction continues"),
+        _block("Corresponding Author:", "section_header"),
+        _block("Name, Department, University"),
+        _block("E-mail: author@example.edu"),
+        _block("onto page two.", page=2),
+    ]
+    kept, removed = _strip_front_matter(blocks)
+    assert kept == [blocks[0], blocks[-1]]
+    assert removed == 3
+
+
 def test_named_case_series_badge_is_removed_from_the_cover():
     blocks = [
         _block("Opening prose continues", page=1),

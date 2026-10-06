@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import dataclass, replace
 
@@ -24,6 +25,105 @@ _EXPLANATION = re.compile(
     r"figures|amounts|values|percentages|note|notes)\b",
     re.I,
 )
+# Demand the entire clause, rather than deleting any parentheses that happen to contain a year.
+_AUTHOR_YEAR = re.compile(
+    r"^(.+?),\s*((?:18|19|20)\d{2}[a-z]?)"
+    r"(?:\s*[,/&–-]\s*(?:(?:18|19|20)\d{2}[a-z]?|[a-z]))*"
+    r"(?:\s*[,;:]\s*(?:pp?\.\s*)?\d+(?:\s*[-–]\s*\d+)?)?\.?$"
+)
+_NAME_WORD = re.compile(r"[^\W\d_]+(?:[-’'][^\W\d_]+)*", re.UNICODE)
+_NAME_CONNECTORS = {"and", "et", "al", "van", "von", "de", "der", "den", "del", "la", "di", "v"}
+_DATE_OR_UNIT = re.compile(
+    r"^(?:January|February|March|April|May|June|July|August|September|October|November|"
+    r"December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|FY|USD|EUR|GBP)\.?$",
+    re.I,
+)
+
+
+def _author_year_sources(markdown: str) -> frozenset[tuple[str, str]]:
+    """Collect first-author/year evidence only from explicitly headed reference lists."""
+
+    sources = set()
+    in_references = False
+    for line in html.unescape(markdown).splitlines():
+        heading = re.match(r"^\s*#{1,6}\s+(.+)", line)
+        if heading:
+            in_references = bool(_REFERENCE_HEADING.fullmatch(heading[1].strip()))
+        if not in_references or heading:
+            continue
+        line = re.sub(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)", "", line).lstrip("[")
+        year = re.search(r"\b(?:18|19|20)\d{2}[a-z]?\b", line)
+        if year:
+            # APA initials follow the first comma; organizational authors usually have none.
+            first_author = line[: year.start()].split(",", 1)[0].rstrip(" .(")
+            sources.add((_author_key(first_author), year[0]))
+    return frozenset(sources)
+
+
+def _author_key(author: str) -> str:
+    # Spacing and hyphen variants must not hide an otherwise exact bibliography match.
+    return re.sub(r"\W+", "", author).casefold()
+
+
+def _is_author_year_clause(clause: str, sources: frozenset[tuple[str, str]]) -> bool:
+    clause = " ".join(clause.split())
+    match = _AUTHOR_YEAR.fullmatch(clause)
+    if not match:
+        return False
+    authors = re.sub(r"^(?:see(?: also)?|cf\.|e\.g\.,)\s+", "", match[1], flags=re.I)
+    if _DATE_OR_UNIT.fullmatch(authors):
+        return False
+    words = _NAME_WORD.findall(authors)
+    # Names, initials and organizations are allowed; prose, numbers and formulas are not.
+    residue = _NAME_WORD.sub("", authors)
+    if not words or residue.strip(" .,\t&"):
+        return False
+    if not any(word[0].isupper() for word in words) or not all(
+        word[0].isupper() or word in _NAME_CONNECTORS for word in words
+    ):
+        return False
+    first_author = re.split(r",|&|\band\b|\bet\s+al\b", authors, maxsplit=1)[0]
+    if (_author_key(first_author), match[2]) in sources:
+        return True
+    # A bare name/year also fits data labels and place/date pairs. Keep it without evidence.
+    return bool(re.search(r",|&|\band\b|\bet\s+al\b", authors))
+
+
+def strip_parenthetical_citations(
+    text: str, *, reference_markdown: str = ""
+) -> tuple[str, int]:
+    """Remove author-year source clauses, retaining explanatory text in mixed parentheses."""
+
+    removed = 0
+    sources = _author_year_sources(reference_markdown)
+
+    def clean(match: re.Match[str]) -> str:
+        nonlocal removed
+        clauses = match[1].split(";")
+        kept = [clause.strip() for clause in clauses if not _is_author_year_clause(clause, sources)]
+        count = len(clauses) - len(kept)
+        if not count:
+            return match[0]
+        removed += count
+        dash = match[2] or ""
+        if kept:
+            return "(" + "; ".join(kept) + ")" + dash
+        # A dash following a citation still separates real prose and needs a spoken pause.
+        if dash:
+            return " - "
+        # Removing a citation between adjacent words must not create a new joined word.
+        before = text[max(0, match.start() - 1) : match.start()]
+        after = text[match.end() : match.end() + 1]
+        return " " if before.isalnum() and after.isalnum() else ""
+
+    # Whitespace inside a citation can include Docling paragraph/page breaks.
+    cleaned = re.sub(r"\(([^()]*)\)([ \t]*[–—-])?", clean, text)
+    if removed:
+        cleaned = re.sub(r"[ \t]+", " ", cleaned)
+        cleaned = re.sub(r"[ \t]+([,.;:!?])", r"\1", cleaned)
+        cleaned = re.sub(r"[ \t]+\)", ")", cleaned)
+        cleaned = re.sub(r" *\n *", "\n", cleaned).lstrip(" \t")
+    return cleaned, removed
 
 
 @dataclass(frozen=True)

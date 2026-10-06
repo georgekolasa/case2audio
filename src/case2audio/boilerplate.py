@@ -14,6 +14,16 @@ _COPYRIGHT_START = re.compile(
     re.I,
 )
 _SENTENCE_END = re.compile(r"[.!?](?=\s|$)")
+# DOI-bearing volume badges are publisher metadata; stop before any adjacent body prose.
+_JOURNAL_BADGE = re.compile(
+    r"^\d{4},?\s+Vol\.\s+(?=[^\n]*(?:©|Reprints and permissions))"
+    r"\d+[^\n]*?\bDOI\s*:\s*10\.\d{4,9}/[^\s]+"
+    r"(?:\s+(?:[\w-]+\.)+[A-Za-z]{2,}(?:/[^\s]*)?)?\s*",
+    re.I,
+)
+_DOI = re.compile(
+    r"(?:\bDOI\s*:\s*|https?://(?:dx\.)?doi\.org/)10\.\d{4,9}/[^\s<>()]+", re.I
+)
 _NOTICE_SENTENCES = tuple(
     re.compile(pattern, re.I)
     for pattern in (
@@ -42,6 +52,9 @@ def strip_publishing_boilerplate(markdown: str) -> str:
         original = paragraph
         flat = re.sub(r"\s+", " ", paragraph).strip()
         normalized = flat
+        flat = _JOURNAL_BADGE.sub("", flat)
+        # Strip only explicitly labeled DOIs; an ordinary number or discussion of DOI stays.
+        flat = _DOI.sub("", flat).strip()
         # These standalone publisher marks are useful visually but add nothing to narration.
         if re.fullmatch(
             r"(?:Columbia Business School|CaseWorks|AT THE VERY CENTER OF BUSINESS[™®]?)",

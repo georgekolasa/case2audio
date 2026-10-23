@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "case2audio"
 version = "0.1.0"
-description = "Turn layout-heavy PDFs into narration text and Amazon Polly audio."
+description = "Turn PDFs and text files into narration text and Amazon Polly audio."
 readme = "README.md"
 requires-python = ">=3.10"
 # A custom SPDX reference keeps package metadata aligned with the proprietary LICENSE terms.

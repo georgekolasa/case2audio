@@ -8,12 +8,13 @@ case2audio_bin="$repo_dir/.venv/bin/case2audio"
 
 usage() {
   cat <<'EOF'
-Usage: ./make-audio [--ocr] [--dry-run] PDF [PDF ...] [case2audio make options]
+Usage: ./make-audio [--ocr] [--dry-run] INPUT [INPUT ...] [case2audio make options]
 
-Turn one or more PDFs into separate narration text and Matthew Generative audio.
-List all PDFs before shared case2audio options. Up to 20 PDFs run through Polly at once.
-Use --jobs 1 after the PDFs for sequential processing.
-Bare filenames are read from ~/Downloads. Use ./file.pdf for the current directory.
+Turn PDFs or UTF-8 .txt scripts into separate Matthew Generative audio.
+List all inputs before shared case2audio options. Up to 20 inputs run through Polly at once.
+Use --jobs 1 after the inputs for sequential processing.
+Bare filenames use this project's input/ folder first, then ~/Downloads.
+Use ./file.txt or ./file.pdf for the current directory.
 
   --ocr       Enable OCR for a scanned/image-only PDF.
   --dry-run   Print the command without extracting or calling AWS.
@@ -22,6 +23,8 @@ Bare filenames are read from ~/Downloads. Use ./file.pdf for the current directo
 Examples:
   ./make-audio case.pdf
   ./make-audio bb.pdf sfn.pdf
+  ./make-audio ManEcon_Audio_Review_Script.txt
+  ./make-audio input/review.txt case.pdf
   ./make-audio --ocr scanned-case.pdf
   ./make-audio ./case.pdf --drop-regex '^confidential$'
 EOF
@@ -30,7 +33,7 @@ EOF
 use_ocr=false
 dry_run=false
 
-# Wrapper-only flags go before the PDFs; shared CLI options go after the file list.
+# Wrapper-only flags go before the inputs; shared CLI options go after the file list.
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ocr)
@@ -56,25 +59,30 @@ if [[ $# -lt 1 ]]; then
   exit 2
 fi
 
-pdfs=()
+inputs=()
 # Validate every input before starting work, so a typo in the second path costs nothing.
 while [[ $# -gt 0 && "$1" != -* ]]; do
-  pdf="$1"
+  source_path="$1"
   shift
-  # A slash makes the path explicit; bare names always use Downloads to avoid ambiguity.
-  if [[ "$pdf" != */* ]]; then
-    pdf="$HOME/Downloads/$pdf"
+  # Dropped-in sources take priority; Downloads remains the fallback for existing commands.
+  # A slash always makes the caller's location explicit, even outside this repository.
+  if [[ "$source_path" != */* ]]; then
+    if [[ -f "$repo_dir/input/$source_path" ]]; then
+      source_path="$repo_dir/input/$source_path"
+    else
+      source_path="$HOME/Downloads/$source_path"
+    fi
   fi
-  if [[ ! -f "$pdf" ]]; then
-    echo "PDF not found: $pdf" >&2
+  if [[ ! -f "$source_path" ]]; then
+    echo "Input not found: $source_path" >&2
     exit 2
   fi
   # Resolve paths before changing directories and keep spaces intact in the array.
-  pdf_dir="$(cd -- "$(dirname -- "$pdf")" && pwd -P)"
-  pdfs+=("$pdf_dir/$(basename -- "$pdf")")
+  source_dir="$(cd -- "$(dirname -- "$source_path")" && pwd -P)"
+  inputs+=("$source_dir/$(basename -- "$source_path")")
 done
 
-if [[ ${#pdfs[@]} -eq 0 ]]; then
+if [[ ${#inputs[@]} -eq 0 ]]; then
   usage >&2
   exit 2
 fi
@@ -107,7 +115,7 @@ if [[ ! -x "$case2audio_bin" ]]; then
 fi
 
 command=(
-  "$case2audio_bin" make "${pdfs[@]}"
+  "$case2audio_bin" make "${inputs[@]}"
   --bucket "$bucket"
   --region "$region"
   --profile "$profile"

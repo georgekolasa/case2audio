@@ -16,7 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="case2audio",
-        description="Extract narration-ready text from PDFs and send it to Amazon Polly.",
+        description="Turn PDFs or existing text files into Amazon Polly narration.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -46,9 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
     speak.set_defaults(handler=_handle_speak)
 
     make = subparsers.add_parser(
-        "make", help="Process PDFs into separate audio, with overlapping Polly jobs."
+        "make", help="Process PDFs or text files into audio, with overlapping Polly jobs."
     )
-    make.add_argument("pdfs", type=Path, nargs="+", help="Source PDFs, followed by shared options.")
+    make.add_argument(
+        "inputs", type=Path, nargs="+", help="Source .pdf or UTF-8 .txt files, then shared options."
+    )
     _add_polly_arguments(make)
     make.add_argument("--no-ocr", action="store_true", help="Skip OCR for born-digital PDFs.")
     make.add_argument(
@@ -61,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--jobs",
         type=int,
         default=20,
-        help="Maximum PDFs processing through Polly at once (default: 20; range: 1-20).",
+        help="Maximum inputs processing through Polly at once (default: 20; range: 1-20).",
     )
     make.set_defaults(handler=_handle_make)
 
@@ -109,14 +111,8 @@ def _handle_extract(args: argparse.Namespace) -> int:
 def _handle_speak(args: argparse.Namespace) -> int:
     from .auth import prepare_session
     from .polly import synthesize_to_directory
-    from .quality import ExtractionSignals, assess_narration
 
-    if not args.text.is_file():
-        raise Case2AudioError(f"Text file not found: {args.text}")
-    text = args.text.read_text(encoding="utf-8")
-    quality_report = assess_narration(text, signals=ExtractionSignals())
-    _print_quality(quality_report)
-    _enforce_quality(quality_report)
+    text = _read_narration(args.text)
     session = prepare_session(profile=args.profile, region=args.region)
     # Generated narration files share a filename; their parent folder identifies the PDF.
     label = f"{args.text.parent.name}.txt" if args.text.name == "narration.txt" else args.text.name
@@ -125,6 +121,26 @@ def _handle_speak(args: argparse.Namespace) -> int:
     )
     _print_parts(parts)
     return 0
+
+
+def _read_narration(path: Path) -> str:
+    """Load an existing script without applying PDF-specific removal or repair rules."""
+
+    from .quality import ExtractionSignals, assess_narration
+
+    if not path.is_file():
+        raise Case2AudioError(f"Text file not found: {path}")
+    try:
+        # Some editors prepend a UTF-8 BOM; it is an encoding marker, not spoken content.
+        # Do not guess other encodings: misdecoded text could silently become paid narration.
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError) as exc:
+        raise Case2AudioError(f"Could not read UTF-8 text file {path}: {exc}") from exc
+    # Reuse the existing speak gate, but never strip citations/headings from a supplied script.
+    report = assess_narration(text, signals=ExtractionSignals())
+    _print_quality(report)
+    _enforce_quality(report)
+    return text
 
 
 def _handle_make(args: argparse.Namespace) -> int:
@@ -143,16 +159,16 @@ def _handle_make(args: argparse.Namespace) -> int:
         raise Case2AudioError("--jobs must be between 1 and 20")
     # Check the whole batch first, including output collisions on case-insensitive filesystems.
     outputs: set[str] = set()
-    for pdf in args.pdfs:
-        if not pdf.is_file():
-            raise Case2AudioError(f"PDF not found: {pdf}")
-        if pdf.suffix.lower() != ".pdf":
-            raise Case2AudioError(f"Expected a .pdf file: {pdf}")
-        if pdf.stem.casefold() in outputs:
+    for source in args.inputs:
+        if not source.is_file():
+            raise Case2AudioError(f"Input not found: {source}")
+        if source.suffix.lower() not in {".pdf", ".txt"}:
+            raise Case2AudioError(f"Expected a .pdf or .txt file: {source}")
+        if source.stem.casefold() in outputs:
             raise Case2AudioError(
-                f"PDFs share an output folder name ({pdf.stem!r}). Rename one before batching."
+                f"Inputs share an output folder name ({source.stem!r}). Rename one before batching."
             )
-        outputs.add(pdf.stem.casefold())
+        outputs.add(source.stem.casefold())
 
     # One login check covers the batch; SDK credentials can refresh during normal use.
     session = prepare_session(profile=args.profile, region=args.region)
@@ -171,7 +187,9 @@ def _handle_make(args: argparse.Namespace) -> int:
     pacer = PollyRequestPacer()
     pending = {}
     failures: list[str] = []
-    retention_token = retention.begin_batch(args.output_dir, [pdf.stem for pdf in args.pdfs])
+    retention_token = retention.begin_batch(
+        args.output_dir, [source.stem for source in args.inputs]
+    )
     # Protect all inputs first, then clean up before slow jobs can time out or be interrupted.
     try:
         retention.prune_cases(args.output_dir)
@@ -185,17 +203,17 @@ def _handle_make(args: argparse.Namespace) -> int:
         if block and not done:
             _print_progress(
                 f"Batch progress: {len(pending)} audio job(s) running; "
-                f"{waiting} PDF(s) waiting to extract."
+                f"{waiting} input(s) waiting to prepare."
             )
         for future in done:
-            pdf = pending.pop(future)
+            source = pending.pop(future)
             try:
                 parts = future.result()
-                print(f"Audio ready: {pdf.name}", flush=True)
+                print(f"Audio ready: {source.name}", flush=True)
                 _print_parts(parts)
                 # Retention is bookkeeping, never a reason to repeat a paid synthesis.
                 try:
-                    retention.complete_case(args.output_dir, pdf.stem, retention_token, parts)
+                    retention.complete_case(args.output_dir, source.stem, retention_token, parts)
                 except (OSError, ValueError) as exc:
                     print(f"WARNING: Could not record audio completion: {exc}", file=sys.stderr)
                 else:
@@ -208,24 +226,24 @@ def _handle_make(args: argparse.Namespace) -> int:
                             file=sys.stderr,
                         )
             except Exception as exc:
-                failures.append(f"{pdf.name}: {exc}")
-                print(f"Audio failed: {pdf.name}: {exc}", file=sys.stderr, flush=True)
+                failures.append(f"{source.name}: {exc}")
+                print(f"Audio failed: {source.name}: {exc}", file=sys.stderr, flush=True)
 
     # Bound paid jobs and keep Docling on the main thread: its native parser is not thread-safe.
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        for index, pdf in enumerate(args.pdfs, start=1):
+        for index, source in enumerate(args.inputs, start=1):
             collect(block=False)
             while len(pending) >= args.jobs and not failures:
-                collect(block=True, waiting=len(args.pdfs) - index + 1)
+                collect(block=True, waiting=len(args.inputs) - index + 1)
             if failures:
                 break
-            print(f"Processing PDF {index}/{len(args.pdfs)}: {pdf.name}", flush=True)
+            print(f"Processing input {index}/{len(args.inputs)}: {source.name}", flush=True)
             try:
-                narration, audio_dir = _prepare_pdf(args, pdf)
-            except (Case2AudioError, ValueError) as exc:
-                failures.append(f"{pdf.name}: {exc}")
+                narration, audio_dir = _prepare_input(args, source)
+            except (Case2AudioError, ValueError, OSError) as exc:
+                failures.append(f"{source.name}: {exc}")
                 break
-            # A running job may have failed while we were extracting the next PDF.
+            # A running job may have failed while we were preparing the next input.
             collect(block=False)
             if failures:
                 break
@@ -236,13 +254,13 @@ def _handle_make(args: argparse.Namespace) -> int:
                 narration,
                 audio_dir,
                 _polly_options(args),
-                label=pdf.name,
+                label=source.name,
                 clients=clients,
                 pacer=pacer,
             )
-            pending[future] = pdf
+            pending[future] = source
 
-        # Already submitted jobs can still succeed; download them even if another PDF failed.
+        # Already submitted jobs can still succeed; download them even if another input failed.
         if failures and pending:
             # A later local failure must not abandon paid Polly tasks without downloading them.
             print(
@@ -259,6 +277,22 @@ def _handle_make(args: argparse.Namespace) -> int:
     if failures:
         raise Case2AudioError("Batch stopped; completed outputs kept. " + "; ".join(failures))
     return 0
+
+
+def _prepare_input(args: argparse.Namespace, source: Path) -> tuple[str, Path]:
+    """Join text scripts to the existing batch flow without loading the PDF parser."""
+
+    if source.suffix.lower() == ".pdf":
+        return _prepare_pdf(args, source)
+    narration = _read_narration(source)
+    job_dir = args.output_dir / source.stem
+    job_dir.mkdir(parents=True, exist_ok=True)
+    narration_path = job_dir / "narration.txt"
+    # Keep the same reviewable narration copy and output layout as PDF jobs. All later
+    # steps (chunking, workers, download verification, retention) remain shared.
+    narration_path.write_text(narration, encoding="utf-8")
+    print(f"Saved narration: {narration_path.resolve()} ({len(narration):,} characters)")
+    return narration, job_dir / f"{source.stem} Case"
 
 
 def _prepare_pdf(args: argparse.Namespace, pdf: Path) -> tuple[str, Path]:

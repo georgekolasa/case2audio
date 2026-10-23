@@ -10,7 +10,8 @@ __pycache__/
 build/
 dist/
 
-# Licensed source documents and generated audio should never be committed by accident.
+# Keep source documents in either accepted input folder out of Git; course material may be licensed.
+input/
 inputs/
 generated/
 *.pdf

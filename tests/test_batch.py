@@ -11,9 +11,9 @@ from case2audio.quality import ExtractionSignals, assess_narration
 
 @pytest.fixture
 def batch(tmp_path, monkeypatch):
-    pdfs = [tmp_path / "bb.pdf", tmp_path / "sfn.pdf"]
-    for pdf in pdfs:
-        pdf.touch()
+    inputs = [tmp_path / "bb.pdf", tmp_path / "sfn.pdf"]
+    for path in inputs:
+        path.touch()
     session = Mock()
     login = Mock(return_value=session)
     monkeypatch.setattr(auth, "prepare_session", login)
@@ -34,7 +34,7 @@ def batch(tmp_path, monkeypatch):
     args = cli.build_parser().parse_args(
         [
             "make",
-            *(str(pdf) for pdf in pdfs),
+            *(str(path) for path in inputs),
             "--bucket",
             "example",
             "--profile",
@@ -46,7 +46,7 @@ def batch(tmp_path, monkeypatch):
     )
     return SimpleNamespace(
         args=args,
-        pdfs=pdfs,
+        inputs=inputs,
         login=login,
         session=session,
         extract=extract,
@@ -58,7 +58,7 @@ def batch(tmp_path, monkeypatch):
 def test_batch_preserves_order_and_separate_outputs_with_one_login(batch, capsys):
     assert cli._handle_make(batch.args) == 0
     batch.login.assert_called_once()
-    assert [call.args[0] for call in batch.extract.call_args_list] == batch.pdfs
+    assert [call.args[0] for call in batch.extract.call_args_list] == batch.inputs
     calls = {call.args[0]: call for call in batch.synthesize.call_args_list}
     assert set(calls) == {"bb", "sfn"}
     # Both workers must share exactly the same client pair and credential refresh lock.
@@ -67,25 +67,73 @@ def test_batch_preserves_order_and_separate_outputs_with_one_login(batch, capsys
     for call in batch.session.client.call_args_list:
         assert call.kwargs["config"].max_pool_connections == batch.args.jobs
         assert call.kwargs["config"].retries["mode"] == "standard"
-    for pdf, write in zip(batch.pdfs, batch.write.call_args_list, strict=True):
-        synth = calls[pdf.stem]
-        assert write.args[1] == batch.args.output_dir / pdf.stem / "narration.txt"
-        assert synth.args[1] == batch.args.output_dir / pdf.stem / f"{pdf.stem} Case"
+    for path, write in zip(batch.inputs, batch.write.call_args_list, strict=True):
+        synth = calls[path.stem]
+        assert write.args[1] == batch.args.output_dir / path.stem / "narration.txt"
+        assert synth.args[1] == batch.args.output_dir / path.stem / f"{path.stem} Case"
         assert "session" not in synth.kwargs
-        assert synth.kwargs["label"] == pdf.name
-    assert "Processing PDF 2/2: sfn.pdf" in capsys.readouterr().out
+        assert synth.kwargs["label"] == path.name
+    assert "Processing input 2/2: sfn.pdf" in capsys.readouterr().out
+
+
+def test_mixed_batch_preserves_script_without_invoking_pdf_extraction(batch, capsys):
+    pdf, _ = batch.inputs
+    text_file = pdf.with_name("handwritten-case.TXT")
+    # These resemble PDF furniture and citations, but an authored script owns its wording.
+    script = "References\n\nOriginal narration (Smith et al., 2024).\n\nCopyright 2024.\n"
+    text_file.write_text(script, encoding="utf-8")
+    batch.inputs = [pdf, text_file]
+    batch.args.inputs = list(batch.inputs)
+
+    assert cli._handle_make(batch.args) == 0
+
+    assert [call.args[0] for call in batch.extract.call_args_list] == [pdf]
+    assert (batch.args.output_dir / text_file.stem / "narration.txt").read_text() == script
+    text_call = next(
+        call
+        for call in batch.synthesize.call_args_list
+        if call.args[1].parent.name == text_file.stem
+    )
+    assert text_call.args[0] == script
+    assert text_call.args[1] == (
+        batch.args.output_dir / text_file.stem / f"{text_file.stem} Case"
+    )
+    assert "Processing input 2/2: handwritten-case.TXT" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("filename", "contents", "error"),
+    [
+        ("missing.txt", None, "Input not found"),
+        ("empty.txt", b"", "quality gate"),
+        ("corrupt.txt", b"123 234 345 " * 100, "quality gate"),
+        ("undecodable.txt", b"\xff\xfe", "read|decode|UTF-8"),
+    ],
+)
+def test_invalid_text_batch_item_never_reaches_synthesis(batch, filename, contents, error):
+    text_file = batch.inputs[0].with_name(filename)
+    if contents is not None:
+        text_file.write_bytes(contents)
+    batch.args.inputs[0] = text_file
+
+    with pytest.raises(Case2AudioError, match=error):
+        cli._handle_make(batch.args)
+
+    batch.synthesize.assert_not_called()
 
 
 @pytest.mark.parametrize("invalid", ["missing", "duplicate", "extension"])
 def test_batch_checks_all_paths_before_login_or_synthesis(batch, invalid):
     if invalid == "missing":
-        batch.args.pdfs[1] = batch.pdfs[1].with_name("missing.pdf")
+        batch.args.inputs[1] = batch.inputs[1].with_name("missing.pdf")
     elif invalid == "duplicate":
-        batch.args.pdfs[1] = batch.pdfs[0]
+        duplicate = batch.inputs[0].with_suffix(".txt")
+        duplicate.touch()
+        batch.args.inputs[1] = duplicate
     else:
-        invalid_path = batch.pdfs[1].with_suffix(".txt")
+        invalid_path = batch.inputs[1].with_suffix(".docx")
         invalid_path.touch()
-        batch.args.pdfs[1] = invalid_path
+        batch.args.inputs[1] = invalid_path
     with pytest.raises(Case2AudioError):
         cli._handle_make(batch.args)
     batch.login.assert_not_called()
@@ -117,9 +165,9 @@ def test_polly_jobs_overlap(batch):
 
 def test_default_limit_allows_five_jobs_to_overlap(batch):
     for name in ("third.pdf", "fourth.pdf", "fifth.pdf"):
-        pdf = batch.pdfs[0].with_name(name)
-        pdf.touch()
-        batch.args.pdfs.append(pdf)
+        path = batch.inputs[0].with_name(name)
+        path.touch()
+        batch.args.inputs.append(path)
     all_started = Barrier(5)
 
     def synthesize(*_args, **_kwargs):
@@ -155,15 +203,15 @@ def test_batch_reports_progress_while_jobs_are_still_running(batch, monkeypatch,
     batch.synthesize.side_effect = synthesize
     assert cli._handle_make(batch.args) == 0
     assert reported
-    assert "Batch progress: 2 audio job(s) running; 0 PDF(s) waiting to extract." in (
+    assert "Batch progress: 2 audio job(s) running; 0 input(s) waiting to prepare." in (
         capsys.readouterr().out
     )
 
 
 def test_failure_still_collects_other_running_job_and_skips_remaining(batch, capsys):
-    third = batch.pdfs[0].with_name("third.pdf")
+    third = batch.inputs[0].with_name("third.pdf")
     third.touch()
-    batch.args.pdfs.append(third)
+    batch.args.inputs.append(third)
     both_started = Barrier(2)
 
     def synthesize(text, *args, **kwargs):
@@ -236,8 +284,8 @@ def test_cleanup_runs_before_extraction_even_if_downloads_fail(batch, monkeypatc
         # Only the first call is the startup check; later calls follow successful downloads.
         if not batch.extract.called:
             batch.synthesize.assert_not_called()
-            for pdf in batch.pdfs:
-                assert retention._read_state(root / pdf.stem)["status"] == "running"
+            for path in batch.inputs:
+                assert retention._read_state(root / path.stem)["status"] == "running"
 
     cleanup = Mock(side_effect=check_start)
     monkeypatch.setattr(retention, "prune_cases", cleanup)
@@ -259,5 +307,5 @@ def test_cleanup_runs_before_extraction_even_if_downloads_fail(batch, monkeypatc
         # Once at startup, then once after each successful download.
         assert cleanup.call_count == 3
         assert all(call.args == (batch.args.output_dir,) for call in cleanup.call_args_list)
-        for pdf in batch.pdfs:
-            assert retention._read_state(batch.args.output_dir / pdf.stem)["status"] == "complete"
+        for path in batch.inputs:
+            assert retention._read_state(batch.args.output_dir / path.stem)["status"] == "complete"

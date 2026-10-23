@@ -1,7 +1,9 @@
 # case2audio
 
-Turn layout-heavy PDFs into clean narration text, then optionally send that text to
-Amazon Polly and download the MP3.
+Turn PDFs or UTF-8 text files into narration text, then send that text to Amazon Polly
+and download the MP3. PDFs go through document extraction and cleanup; `.txt` files go
+straight to the shared quality checks and audio flow, with their text preserved apart
+from removing a leading UTF-8 BOM and normalizing newlines.
 
 ## Run it
 
@@ -9,32 +11,45 @@ Amazon Polly and download the MP3.
 ./make-audio bb.pdf
 ```
 
-Or process several PDFs with one command:
+Text files work the same way:
 
 ```bash
-./make-audio bb.pdf sfn.pdf
+./make-audio ManEcon_Audio_Review_Script.txt
 ```
 
-Bare filenames default to `~/Downloads`, so this reads `~/Downloads/bb.pdf` and
-`~/Downloads/sfn.pdf`. Explicit paths still work: `./bb.pdf` uses the current directory,
-and `~/Documents/bb.pdf` or an absolute path uses that location. You can mix filenames and
-explicit paths in one command. Quote filenames containing spaces, e.g. `"my case.pdf"`.
+You can also pass an explicit path, including a file under the repository's `input/` folder:
 
-PDF extraction runs one at a time, but **up to 20 PDFs process through Polly concurrently**.
-While Polly generates `bb.pdf`, the command extracts `sfn.pdf` and starts its audio job.
-Results stay separate in `generated/bb/` and `generated/sfn/`. Use `--jobs 1` after the PDFs
-for sequential processing, or `--jobs N` (1-20) to change the concurrency limit. Polly requests
-are spaced to respect AWS's generative task and status-check rate limits. While audio jobs run,
-the terminal reports the running and waiting counts every 30 seconds.
+```bash
+./make-audio input/ManEcon_Audio_Review_Script.txt
+```
 
-Login is checked once before the batch. List all PDFs before shared options, such as
+Or process several PDFs and text files with one command:
+
+```bash
+./make-audio bb.pdf ManEcon_Audio_Review_Script.txt
+```
+
+For a bare filename, `make-audio` first looks in the repository's `input/` folder and uses
+that file if it exists; otherwise it looks in `~/Downloads`. Explicit paths keep their
+supplied location: `./bb.pdf` uses the current directory, and `~/Documents/bb.pdf` or an
+absolute path uses that location. You can mix filenames and explicit paths in one command.
+Quote filenames containing spaces, e.g. `"my case.pdf"`.
+
+PDF extraction runs one at a time, but **up to 20 files process through Polly concurrently**.
+While Polly generates audio for one source, the command prepares the next source and starts
+its audio job. Results stay separate under `generated/<source-stem>/`. Use `--jobs 1` after
+the input files for sequential processing, or `--jobs N` (1-20) to change the concurrency
+limit. Polly requests are spaced to respect AWS's generative task and status-check rate limits.
+While audio jobs run, the terminal reports the running and waiting counts every 30 seconds.
+
+Login is checked once before the batch. List all input files before shared options, such as
 `--table-mode linearize`. All paths are checked up front; duplicate output names are rejected.
 When a failure is detected, new jobs stop; already running jobs finish and download their outputs.
-The command reports the failures and exits nonzero. Rerun only unfinished PDFs to avoid paying
+The command reports the failures and exits nonzero. Rerun only unfinished inputs to avoid paying
 for completed audio again.
 
-Polly messages include local time, timezone, and PDF names. Processing messages also show the
-number of characters submitted for that part, for example:
+Polly messages include local time, timezone, and source filenames. Processing messages also show
+the number of characters submitted for that part, for example:
 
 ```text
 [16:15:03 EDT] [bb.pdf] Polly is processing part 1/1 (45,784 characters; task ...).
@@ -54,7 +69,7 @@ uploaded for OCR. Empty text, widespread encoding debris, and repeated isolated-
 are blocked before Polly. If the retry still fails, no audio is submitted. OCR is not perfect;
 review names, figures, and the quality report when `OCR_RECOVERY` appears.
 
-The command checks AWS access **before extracting the PDF**. If your browser login has expired,
+The command checks AWS access before preparing a batch. If your browser login has expired,
 it runs `aws login --profile case2audio` (or the configured profile), opens the browser, and
 continues after you sign in. SSO profiles use `aws sso login`. Polly progress messages show when
 the task is submitted, processing, and downloading.
@@ -63,8 +78,12 @@ Recovery also handles AWS's `CreateOAuth2Token` invalid/expired authorization-gr
 Valid sessions proceed without browser login; AWS can still require sign-in when a session
 expires or is revoked.
 
-The MP3 lands at `generated/bb/bb Case/bbCase.mp3`; the reviewed text is
-`generated/bb/narration.txt`. Documents over 95,000 characters produce ordered audio parts.
+For either source type, the reviewed text is `generated/<source-stem>/narration.txt`, and the
+MP3 lands at `generated/<source-stem>/<source-stem> Case/<source-stem>Case.mp3`. For example,
+`ManEcon_Audio_Review_Script.txt` produces
+`generated/ManEcon_Audio_Review_Script/narration.txt` and
+`generated/ManEcon_Audio_Review_Script/ManEcon_Audio_Review_Script Case/ManEcon_Audio_Review_ScriptCase.mp3`.
+Inputs over 95,000 characters produce ordered audio parts.
 
 At batch startup, after input/AWS checks and before extraction, cleanup keeps the **newest five completed
 cases**, plus **every case completed within the last 48 hours**. So ten cases made today all
@@ -85,12 +104,14 @@ again after every successful download, so another PDF timing out cannot postpone
 folders count when their narration has exactly the expected number of complete, nonempty MP3s,
 regardless of the older audio-folder naming scheme. The terminal always reports the check.
 
-S3 audio uses the PDF name: `bb.pdf` becomes `s3://polly-gsk/case2audio/bb.mp3` and
-`sfn.pdf` becomes `s3://polly-gsk/case2audio/sfn.mp3`. Longer documents use `bb-part-001.mp3`,
-`bb-part-002.mp3`, etc. `--prefix` changes the `case2audio/` folder. A later successful run of
-the same name replaces its readable S3 copy. Local downloads use `<PDF name> Case/<PDF name>Case.mp3`,
-with `-part-001`, `-part-002`, etc. for multi-part audio. Existing downloads are not moved.
-After each verified local download, both the task original and PDF-named S3 copy are deleted.
+S3 audio uses the source stem: `bb.pdf` becomes `s3://polly-gsk/case2audio/bb.mp3`, while
+`ManEcon_Audio_Review_Script.txt` becomes
+`s3://polly-gsk/case2audio/ManEcon_Audio_Review_Script.mp3`. Longer documents use numbered parts,
+such as `bb-part-001.mp3` and `bb-part-002.mp3`. `--prefix` changes the `case2audio/` folder.
+A later successful run of the same stem replaces its readable S3 copy. Local downloads use
+`<source-stem> Case/<source-stem>Case.mp3`, with numbered suffixes for multi-part audio.
+Existing downloads are not moved. After each verified local download, both the task original
+and source-named S3 copy are deleted.
 Verification checks the received byte count and rereads the saved file to compare its SHA-256;
 S3 checksums are also requested. Failed downloads preserve the S3 original for recovery.
 Cleanup failures print a warning without failing a successfully downloaded audiobook.
@@ -147,8 +168,9 @@ On a fresh machine, run `aws login --profile case2audio` once, then use `./make-
 The first extraction downloads Docling's models. The bucket must already exist in the same
 region as Polly. Use an existing SSO profile if that is how your AWS account is configured.
 
-Source PDFs, extracted text, and audio are ignored by Git so licensed course material does
-not accidentally land on GitHub.
+Source PDFs, files in `input/` or `inputs/`, and generated text/audio are ignored by Git so
+licensed course material does not accidentally land on GitHub. Create `input/` if it does
+not exist in a new checkout.
 
 ## Architecture
 
@@ -159,11 +181,14 @@ not accidentally land on GitHub.
 flowchart LR
     subgraph local[Your machine]
         PDF[Source PDF]
+        TXT[UTF-8 .txt source]
+        Resolve[Resolve bare name: input/ first, then Downloads]
         Wrapper[make-audio wrapper]
         CLI[case2audio make]
         Auth[Check AWS session and refresh browser login]
         Safety[Visual-redaction safety scan]
         Docling[Docling extraction and optional OCR]
+        Bypass[Read text directly; remove BOM and normalize newlines]
         OCR[Corrupt text: retry once with local full-page OCR]
         Evidence[Original PDF spacing, punctuation, and raised markers]
         Margins[Remove front matter and margin text]
@@ -182,7 +207,9 @@ flowchart LR
         Retention[Before extraction: keep newest 5 and all under 48 hours]
         Trash[Move older completed case folders to Trash]
 
-        PDF --> Wrapper --> CLI --> Auth --> Safety --> Docling --> Evidence --> Margins --> Exhibits --> Order --> Citations --> Clean --> Text
+        PDF --> Resolve --> Wrapper --> CLI --> Auth --> Safety --> Docling --> Evidence --> Margins --> Exhibits --> Order --> Citations --> Clean --> Text
+        TXT --> Resolve
+        Auth --> Bypass --> Text
         Text --> Quality --> Split
         Docling -. corrupt text .-> OCR --> Evidence
         Download --> Verify --> MP3 --> Cleanup
@@ -209,16 +236,19 @@ flowchart LR
 
 The responsibilities are deliberately separated:
 
-- `make-audio` loads the ignored local AWS configuration and invokes the installed CLI. It skips
-  OCR by default because most source PDFs already contain selectable text. Multiple input paths
-  form a batch: one session check, then the per-PDF flow below with separate outputs.
-  Bare filenames resolve from `~/Downloads`; explicit paths keep their supplied location.
+- `make-audio` loads the ignored local AWS configuration and invokes the installed CLI. PDFs
+  follow the extraction flow below; UTF-8 `.txt` inputs bypass Docling, OCR, and PDF-specific
+  cleanup so their wording is retained apart from BOM removal and newline normalization. Both
+  types share the quality gate, Polly chunking, concurrency, output layout, and retention rules.
+  Multiple paths form a batch with one session check and separate outputs. Bare filenames resolve
+  from `input/` when present, then `~/Downloads`; explicit paths keep their supplied location.
 - `retention.py` records case completion and runs local cleanup before batch extraction.
   A filesystem lock protects running batches; uncertain or incomplete outputs are never pruned.
   This local retention is separate from S3 cleanup and never touches the input PDFs.
-- Docling extraction and quality checks run sequentially on the main thread because of the native
-  parser's threading constraints. A bounded worker pool overlaps Polly submission, polling, and
-  downloads for up to `--jobs` PDFs (default 20). Workers share Polly/S3 clients created on the
+- PDF extraction and quality checks run sequentially on the main thread because of the native
+  parser's threading constraints. Text inputs skip Docling and PDF extraction, then join the same
+  quality checks and audio flow. A bounded worker pool overlaps Polly submission, polling, and
+  downloads for up to `--jobs` inputs (default 20). Workers share Polly/S3 clients created on the
   main thread, so credential refresh is coordinated instead of racing the same cached token.
   One shared pacer spaces task submissions and status checks across all workers; the CLI reports
   running and waiting counts every 30 seconds while the batch waits.
@@ -259,7 +289,7 @@ The responsibilities are deliberately separated:
   inventory notes are skipped, while simple unit conversions remain spoken as equivalences.
   Content figures—including small diagrams—receive short review notices, and loose labels inside
   their bounds are removed so arrows and isolated words are not narrated as prose.
-- The cleaned result and extraction diagnostics are written under `generated/<pdf-name>/` before
+- The cleaned result and extraction diagnostics are written under `generated/<source-stem>/` before
   any paid synthesis request is made. The quality report blocks known redaction leaks, footer
   leaks, and unspeakable private-use glyphs left behind by PDF icon fonts.
 - `case2audio speak` splits reviewed narration at safe paragraph or sentence boundaries, validates
@@ -275,9 +305,10 @@ The responsibilities are deliberately separated:
   it then creates a fresh SDK session and verifies access before continuing. `speak` checks
   access too; `extract` stays local. `case2audio doctor` only checks dependencies and AWS access.
 
-Only cleaned narration is sent as synthesis content; the source PDF and Docling debug files stay
-local. Successful downloads trigger immediate S3 cleanup; interrupted runs rely on the bucket's
-lifecycle fallback. That fallback must be configured separately for a different bucket or prefix.
+Only narration that passes the shared quality gate is sent as synthesis content; source files and
+Docling debug files stay local. Successful downloads trigger immediate S3 cleanup; interrupted
+runs rely on the bucket's lifecycle fallback. That fallback must be configured separately for a
+different bucket or prefix.
 
 ## Extraction and output
 

@@ -8,6 +8,7 @@ import re
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -162,6 +163,7 @@ def synthesize_to_directory(
     label: str | None = None,
     clients: tuple[Any, Any] | None = None,
     pacer: PollyRequestPacer | None = None,
+    on_started: Callable[[], None] | None = None,
 ) -> list[AudioPart]:
     """Submit, wait for, and download one or more Polly speech tasks."""
 
@@ -225,6 +227,14 @@ def synthesize_to_directory(
             f"({len(chunk):,} characters; task {task_id}).",
             label,
         )
+        if index == 1 and on_started is not None:
+            # A queued Python worker is not proof AWS has started. Notify the batch only
+            # after Polly returns a task ID, so disk cleanup overlaps paid audio generation.
+            try:
+                on_started()
+            except Exception as exc:
+                # This task is already paid for: housekeeping must never abandon its download.
+                print(f"WARNING: Post-submission housekeeping failed: {exc}", file=sys.stderr)
         task = _wait_for_task(
             polly,
             task_id,

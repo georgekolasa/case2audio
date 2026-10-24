@@ -279,33 +279,94 @@ def test_invalid_worker_limit_fails_before_aws(batch, invalid):
 
 
 @pytest.mark.parametrize("fails", [False, True])
-def test_cleanup_runs_before_extraction_even_if_downloads_fail(batch, monkeypatch, fails):
+def test_cleanup_runs_after_submission_even_if_downloads_fail(batch, monkeypatch, fails):
+    batch.args.jobs = 1
+    started = Event()
+    original_extract = batch.extract.side_effect
+
+    def extract(pdf, **kwargs):
+        if not started.is_set():
+            cleanup.assert_not_called()
+        return original_extract(pdf, **kwargs)
+
     def check_start(root):
-        # Only the first call is the startup check; later calls follow successful downloads.
-        if not batch.extract.called:
-            batch.synthesize.assert_not_called()
+        assert started.is_set()
+        # The initial check protects the entire batch, including inputs not yet prepared.
+        if cleanup.call_count == 1:
             for path in batch.inputs:
                 assert retention._read_state(root / path.stem)["status"] == "running"
 
     cleanup = Mock(side_effect=check_start)
     monkeypatch.setattr(retention, "prune_cases", cleanup)
+    batch.extract.side_effect = extract
+
+    def downloaded(text, audio_dir, *args, **kwargs):
+        started.set()
+        kwargs["on_started"]()
+        if fails:
+            raise Case2AudioError("Polly failed")
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        path = audio_dir / f"{text}Case.mp3"
+        path.write_bytes(b"downloaded audio")
+        return [SimpleNamespace(path=path)]
+
+    batch.synthesize.side_effect = downloaded
     if fails:
-        batch.synthesize.side_effect = Case2AudioError("Polly failed")
         with pytest.raises(Case2AudioError):
             cli._handle_make(batch.args)
         cleanup.assert_called_once_with(batch.args.output_dir)
     else:
-
-        def downloaded(text, audio_dir, *args, **kwargs):
-            audio_dir.mkdir(parents=True, exist_ok=True)
-            path = audio_dir / f"{text}Case.mp3"
-            path.write_bytes(b"downloaded audio")
-            return [SimpleNamespace(path=path)]
-
-        batch.synthesize.side_effect = downloaded
         assert cli._handle_make(batch.args) == 0
-        # Once at startup, then once after each successful download.
+        # Once after the first submission, then once after each successful download.
         assert cleanup.call_count == 3
         assert all(call.args == (batch.args.output_dir,) for call in cleanup.call_args_list)
         for path in batch.inputs:
             assert retention._read_state(batch.args.output_dir / path.stem)["status"] == "complete"
+
+
+def test_cleanup_skipped_when_first_input_fails_before_submission(batch, monkeypatch):
+    cleanup = Mock()
+    monkeypatch.setattr(retention, "prune_cases", cleanup)
+    batch.extract.side_effect = Case2AudioError("bad extraction")
+    with pytest.raises(Case2AudioError, match="bad extraction"):
+        cli._handle_make(batch.args)
+    cleanup.assert_not_called()
+
+
+def test_cleanup_skipped_when_polly_rejects_submission(batch, monkeypatch):
+    cleanup = Mock()
+    monkeypatch.setattr(retention, "prune_cases", cleanup)
+    batch.synthesize.side_effect = Case2AudioError("submission rejected")
+    with pytest.raises(Case2AudioError, match="submission rejected"):
+        cli._handle_make(batch.args)
+    cleanup.assert_not_called()
+
+
+def test_concurrent_submissions_run_initial_cleanup_once(batch, monkeypatch):
+    both_started = Barrier(2)
+    cleanup = Mock()
+    monkeypatch.setattr(retention, "prune_cases", cleanup)
+
+    def synthesize(*_args, **kwargs):
+        both_started.wait(timeout=3)
+        kwargs["on_started"]()
+        return []
+
+    batch.synthesize.side_effect = synthesize
+    assert cli._handle_make(batch.args) == 0
+    # One initial check plus the existing check after each successful worker result.
+    assert cleanup.call_count == 3
+
+
+def test_cleanup_failure_does_not_stop_audio_workers(batch, monkeypatch, capsys):
+    cleanup = Mock(side_effect=OSError("Trash unavailable"))
+    monkeypatch.setattr(retention, "prune_cases", cleanup)
+
+    def synthesize(*_args, **kwargs):
+        kwargs["on_started"]()
+        return []
+
+    batch.synthesize.side_effect = synthesize
+    assert cli._handle_make(batch.args) == 0
+    assert batch.synthesize.call_count == 2
+    assert "Local cleanup skipped: Trash unavailable" in capsys.readouterr().err

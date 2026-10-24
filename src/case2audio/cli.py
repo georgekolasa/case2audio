@@ -6,6 +6,7 @@ import argparse
 import sys
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
+from threading import Lock
 
 from . import __version__
 from .errors import Case2AudioError
@@ -190,11 +191,28 @@ def _handle_make(args: argparse.Namespace) -> int:
     retention_token = retention.begin_batch(
         args.output_dir, [source.stem for source in args.inputs]
     )
-    # Protect all inputs first, then clean up before slow jobs can time out or be interrupted.
-    try:
-        retention.prune_cases(args.output_dir)
-    except OSError as exc:
-        print(f"WARNING: Local cleanup skipped: {exc}. Continuing audio creation.", file=sys.stderr)
+    # Protect every input immediately, but let AWS start audio before spending time on cleanup.
+    cleanup_lock = Lock()
+    cleanup_started = False
+
+    def prune_local() -> None:
+        try:
+            retention.prune_cases(args.output_dir)
+        except OSError as exc:
+            print(
+                f"WARNING: Local cleanup skipped: {exc}. Continuing audio creation.",
+                file=sys.stderr,
+            )
+
+    def cleanup_after_start() -> None:
+        nonlocal cleanup_started
+        # Several workers may get a task ID at once. Only one does the initial cleanup;
+        # release this lock before disk work so other workers can keep polling their tasks.
+        with cleanup_lock:
+            if cleanup_started:
+                return
+            cleanup_started = True
+        prune_local()
 
     def collect(*, block: bool, waiting: int = 0) -> None:
         if not pending:
@@ -218,13 +236,7 @@ def _handle_make(args: argparse.Namespace) -> int:
                     print(f"WARNING: Could not record audio completion: {exc}", file=sys.stderr)
                 else:
                     # Recheck immediately so a later worker timeout cannot postpone cleanup.
-                    try:
-                        retention.prune_cases(args.output_dir)
-                    except OSError as exc:
-                        print(
-                            f"WARNING: Local cleanup skipped: {exc}. Downloaded audio is safe.",
-                            file=sys.stderr,
-                        )
+                    prune_local()
             except Exception as exc:
                 failures.append(f"{source.name}: {exc}")
                 print(f"Audio failed: {source.name}: {exc}", file=sys.stderr, flush=True)
@@ -257,6 +269,7 @@ def _handle_make(args: argparse.Namespace) -> int:
                 label=source.name,
                 clients=clients,
                 pacer=pacer,
+                on_started=cleanup_after_start,
             )
             pending[future] = source
 

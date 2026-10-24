@@ -236,6 +236,73 @@ def test_synthesis_submits_waits_and_downloads(tmp_path: Path, capsys) -> None:
     )
 
 
+def test_started_callback_runs_once_after_acceptance_and_before_polling(tmp_path, monkeypatch):
+    session = FakeSession()
+    events = []
+    original_poll = session.polly.get_speech_synthesis_task
+
+    def poll(**kwargs):
+        events.append("poll")
+        return original_poll(**kwargs)
+
+    def started():
+        events.append(("started", len(session.polly.start_calls)))
+
+    # Two parts prove the callback is per document, not per paid task.
+    monkeypatch.setattr(polly, "split_for_polly", lambda _: ["First.", "Second."])
+    session.polly.get_speech_synthesis_task = poll
+    parts = synthesize_to_directory(
+        "First. Second.", tmp_path, PollyOptions(bucket="example"),
+        session=session, on_started=started,
+    )
+    assert events == [("started", 1), "poll", "poll"]
+    assert len(parts) == 2
+
+
+def test_rejected_submission_never_calls_started_callback(tmp_path):
+    session = FakeSession()
+    session.polly.start_speech_synthesis_task = Mock(side_effect=RuntimeError("rejected"))
+    started = Mock()
+    with pytest.raises(Case2AudioError, match="rejected"):
+        synthesize_to_directory(
+            "Text.", tmp_path, PollyOptions(bucket="example"),
+            session=session, on_started=started,
+        )
+    started.assert_not_called()
+
+
+def test_started_callback_failure_still_downloads_paid_audio(tmp_path, capsys):
+    session = FakeSession()
+    parts = synthesize_to_directory(
+        "Text.", tmp_path, PollyOptions(bucket="example"), session=session,
+        on_started=Mock(side_effect=RuntimeError("housekeeping failed")),
+    )
+    assert parts[0].path.read_bytes() == b"fake mp3"
+    assert len(session.polly.start_calls) == 1
+    assert "Post-submission housekeeping failed" in capsys.readouterr().err
+
+
+def test_text_batch_cleans_up_while_polly_runs_then_rechecks_after_download(tmp_path, monkeypatch):
+    from case2audio import auth, cli, retention
+
+    source = tmp_path / "review.txt"
+    source.write_text("Review script.", encoding="utf-8")
+    session = FakeSession()
+    checkpoints = []
+    monkeypatch.setattr(auth, "prepare_session", Mock(return_value=session))
+
+    def cleanup(_root):
+        checkpoints.append((len(session.polly.start_calls), len(session.s3.download_calls)))
+
+    # Keep the real CLI, worker, and Polly orchestration connected, replacing only AWS
+    # and the filesystem cleanup boundary so this test cannot bill or trash user files.
+    monkeypatch.setattr(retention, "prune_cases", cleanup)
+    assert cli.main([
+        "make", str(source), "--bucket", "example", "--output-dir", str(tmp_path / "generated")
+    ]) == 0
+    assert checkpoints == [(1, 0), (1, 1)]
+
+
 def test_synthesis_rejects_unsupported_voice_before_starting_task(tmp_path: Path) -> None:
     session = FakeSession()
     session.polly.describe_voices = lambda **kwargs: {"Voices": []}

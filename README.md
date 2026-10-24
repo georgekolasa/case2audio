@@ -85,12 +85,14 @@ MP3 lands at `generated/<source-stem>/<source-stem> Case/<source-stem>Case.mp3`.
 `generated/ManEcon_Audio_Review_Script/ManEcon_Audio_Review_Script Case/ManEcon_Audio_Review_ScriptCase.mp3`.
 Inputs over 95,000 characters produce ordered audio parts.
 
-At batch startup, after input/AWS checks and before extraction, cleanup keeps the **newest five completed
-cases**, plus **every case completed within the last 48 hours**. So ten cases made today all
-stay. Older completed cases beyond those five move, as whole folders (audio, narration, and
-debug files), from `generated/` to macOS Trash. This is recoverable; **empty Trash to reclaim
-disk space**. Source PDFs and the current batch's case folders are protected. Cleanup happens
-even if subsequent audio jobs fail or time out; it does not wait for downloads to finish.
+Before preparing inputs, the batch marks its case folders as active so cleanup cannot remove
+them. After Polly successfully accepts the first audio task, cleanup keeps the **newest five
+completed cases**, plus **every case completed within the last 48 hours**. So ten cases made today
+all stay. Older completed cases beyond those five move, as whole folders (audio, narration, and
+debug files), from `generated/` to macOS Trash. This is recoverable; **empty Trash to reclaim disk
+space**. Source files and active case folders are protected. Cleanup runs while Polly generates
+audio, and is checked again after every successful local download. If no Polly task is submitted,
+cleanup does not run.
 
 Polly processing waits up to **25 minutes (1,500 seconds) per audio part**, independently for
 each PDF. This changes how long the command waits, not how quickly Polly generates audio.
@@ -204,7 +206,7 @@ flowchart LR
         Verify[Verify and atomically save download]
         MP3[Local MP3 parts]
         Cleanup[Delete both S3 copies]
-        Retention[Before extraction: keep newest 5 and all under 48 hours]
+        Retention[After first Polly submission: keep newest 5 and all under 48 hours]
         Trash[Move older completed case folders to Trash]
 
         PDF --> Resolve --> Wrapper --> CLI --> Auth --> Safety --> Docling --> Evidence --> Margins --> Exhibits --> Order --> Citations --> Clean --> Text
@@ -213,7 +215,7 @@ flowchart LR
         Text --> Quality --> Split
         Docling -. corrupt text .-> OCR --> Evidence
         Download --> Verify --> MP3 --> Cleanup
-        Auth --> Retention --> Trash
+        Retention --> Trash
     end
 
     subgraph aws[AWS in the configured region]
@@ -226,6 +228,7 @@ flowchart LR
     end
 
     Split --> Pacer --> Polly
+    Polly --> Retention
     Pacer -. spaces status checks .-> Download
     Auth <--> STS
     Auth <--> Validate
@@ -242,9 +245,11 @@ The responsibilities are deliberately separated:
   types share the quality gate, Polly chunking, concurrency, output layout, and retention rules.
   Multiple paths form a batch with one session check and separate outputs. Bare filenames resolve
   from `input/` when present, then `~/Downloads`; explicit paths keep their supplied location.
-- `retention.py` records case completion and runs local cleanup before batch extraction.
-  A filesystem lock protects running batches; uncertain or incomplete outputs are never pruned.
-  This local retention is separate from S3 cleanup and never touches the input PDFs.
+- `retention.py` records case completion and runs local cleanup after Polly accepts the first task,
+  while Polly generates audio. The batch marks its case folders active before input preparation;
+  a filesystem lock protects running batches, and uncertain or incomplete outputs are never pruned.
+  Cleanup runs again after each successful local download, and does not run if Polly accepts no
+  tasks. This local retention is separate from S3 cleanup and never touches the input files.
 - PDF extraction and quality checks run sequentially on the main thread because of the native
   parser's threading constraints. Text inputs skip Docling and PDF extraction, then join the same
   quality checks and audio flow. A bounded worker pool overlaps Polly submission, polling, and

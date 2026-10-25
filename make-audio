@@ -4,7 +4,9 @@ set -euo pipefail
 # Anchor paths to this script so it works from any current directory.
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 config_file="${CASE2AUDIO_CONFIG:-$repo_dir/.case2audio.env}"
-case2audio_bin="$repo_dir/.venv/bin/case2audio"
+python_bin="$repo_dir/.venv/bin/python"
+# shellcheck source=scripts/runtime.sh
+source "$repo_dir/scripts/runtime.sh"
 
 usage() {
   cat <<'EOF'
@@ -108,14 +110,15 @@ if [[ -z "$bucket" || "$bucket" == "YOUR-UNIQUE-CASE2AUDIO-BUCKET" ]]; then
   exit 2
 fi
 
-if [[ ! -x "$case2audio_bin" ]]; then
-  echo "case2audio is not installed in .venv." >&2
-  echo "Run: ./scripts/bootstrap.sh" >&2
-  exit 2
+# Previewing paths must not trigger Python downloads or install any packages.
+if [[ "$dry_run" == false ]] && ! case2audio_runtime_ready "$repo_dir"; then
+  echo "Preparing case2audio for this folder (first run only)..."
+  bash "$repo_dir/scripts/bootstrap.sh"
 fi
 
 command=(
-  "$case2audio_bin" make "${inputs[@]}"
+  # Launch through Python: console-script shebangs contain paths that break after a move.
+  "$python_bin" -m case2audio.cli make "${inputs[@]}"
   --bucket "$bucket"
   --region "$region"
   --profile "$profile"

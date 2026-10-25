@@ -1,5 +1,6 @@
 .DS_Store
 .venv/
+.venv-backup.*/
 # Keep machine/account-specific AWS settings out of the public repository.
 .case2audio.env
 __pycache__/

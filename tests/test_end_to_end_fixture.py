@@ -30,10 +30,8 @@ def test_synthetic_pdf_runs_through_the_complete_extraction_pipeline():
     assert "Figure omitted page 2." in text
     assert result.quality_report.findings
     assert result.quality_report.blocking == ()
-    report = result.quality_report.render()
-    # Prove that Docling really damaged both numbers and one word, then source geometry fixed them.
-    assert "SOURCE_NUMBER_REPAIRS: Repaired 2 damaged number(s)" in report
-    assert "SOURCE_WORD_JOINS: Repaired 1 word splits" in report
+    # Check the final numbers/words above, not how many mistakes a particular parser makes.
+    # Focused source-repair tests inject known damage; upstream improvements should pass here.
 
     # None of this visual navigation or citation material should reach an audio script.
     assert "EXAMPLE CASE SERIES" not in text

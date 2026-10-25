@@ -150,13 +150,28 @@ browser. Permission and network errors stop early with their actual cause.
 
 ## Setup on a new machine
 
-Requires Python 3.12 and AWS CLI v2 with `aws login` support (`brew install python@3.12 awscli`
-on macOS).
+`./make-audio case.pdf` automatically prepares a missing or broken local Python environment.
+Setup uses [uv](https://docs.astral.sh/uv/guides/install-python/) to find Python 3.12 or download it
+when missing; Python does not need to be installed separately or added to your PATH. If needed,
+uv itself is installed to `~/.local/bin` without changing shell profiles. The first setup downloads
+the dependencies and can take a few minutes. Later runs reuse the environment.
+
+AWS CLI v2 with `aws login` support is still required (`brew install awscli` on macOS).
+Copy the ignored local config into a new checkout and set your bucket/profile:
 
 ```bash
-./scripts/bootstrap.sh
 cp .case2audio.env.example .case2audio.env
+./make-audio case.pdf
 ```
+
+To install dependencies ahead of time, run `./scripts/bootstrap.sh`. Developers can run
+`./scripts/bootstrap.sh --dev` to include pytest and Ruff. Both commands work from any directory
+when invoked by their path. No virtualenv activation is needed. `CASE2AUDIO_PYTHON` remains an
+optional interpreter override.
+
+When moving this project, copy the code and `.case2audio.env`; `.venv` can be left behind and
+will be recreated. A broken copied environment is moved to an ignored `.venv-backup.*` folder
+for recovery. Normal runs use the local Python directly, avoiding old console-script paths.
 
 Set the local config to your existing bucket and profile. For this setup:
 
@@ -186,6 +201,7 @@ flowchart LR
         TXT[UTF-8 .txt source]
         Resolve[Resolve bare name: input/ first, then Downloads]
         Wrapper[make-audio wrapper]
+        Setup[If needed: prepare local Python and dependencies]
         CLI[case2audio make]
         Auth[Check AWS session and refresh browser login]
         Safety[Visual-redaction safety scan]
@@ -210,6 +226,7 @@ flowchart LR
         Trash[Move older completed case folders to Trash]
 
         PDF --> Resolve --> Wrapper --> CLI --> Auth --> Safety --> Docling --> Evidence --> Margins --> Exhibits --> Order --> Citations --> Clean --> Text
+        Wrapper -. missing environment .-> Setup --> CLI
         TXT --> Resolve
         Auth --> Bypass --> Text
         Text --> Quality --> Split
@@ -239,7 +256,10 @@ flowchart LR
 
 The responsibilities are deliberately separated:
 
-- `make-audio` loads the ignored local AWS configuration and invokes the installed CLI. PDFs
+- `make-audio` loads the ignored local AWS configuration, prepares missing dependencies through
+  `scripts/bootstrap.sh`, and invokes the CLI through the local Python. Shared `runtime.sh`
+  checks avoid loading Docling models just to check the install. Help and dry runs need no Python
+  environment. PDFs
   follow the extraction flow below; UTF-8 `.txt` inputs bypass Docling, OCR, and PDF-specific
   cleanup so their wording is retained apart from BOM removal and newline normalization. Both
   types share the quality gate, Polly chunking, concurrency, output layout, and retention rules.

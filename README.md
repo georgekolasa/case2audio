@@ -86,11 +86,12 @@ MP3 lands at `generated/<source-stem>/<source-stem> Case/<source-stem>Case.mp3`.
 Inputs over 95,000 characters produce ordered audio parts.
 
 Before preparing inputs, the batch marks its case folders as active so cleanup cannot remove
-them. After Polly successfully accepts the first audio task, cleanup keeps the **newest five
-completed cases**, plus **every case completed within the last 48 hours**. So ten cases made today
-all stay. Older completed cases beyond those five move, as whole folders (audio, narration, and
-debug files), from `generated/` to macOS Trash. This is recoverable; **empty Trash to reclaim disk
-space**. Source files and active case folders are protected. Cleanup runs while Polly generates
+them. After Polly successfully accepts the first audio task, cleanup keeps the **newest 20
+completed cases**, plus **every case completed or edited within the last 408 hours (17 days)**.
+So 25 cases made today all stay. Older completed cases beyond those 20 move as whole folders
+(audio, narration, and debug files) from `generated/` to macOS Trash. This is recoverable;
+**empty Trash to reclaim disk space**. Source files and active case folders are protected.
+Cleanup runs while Polly generates
 audio, and is checked again after every successful local download. If no Polly task is submitted,
 cleanup does not run.
 
@@ -100,7 +101,7 @@ each PDF. This changes how long the command waits, not how quickly Polly generat
 Completion timestamps are recorded in each case's `.audio-state.json`. Failed/in-progress
 runs, narration-only folders, and nested review folders are left alone. Older outputs without
 a completion record qualify only when all expected MP3 parts exist; their audio modification
-times provide the age. Recent edits also protect a folder for 48 hours. Separate `make-audio`
+times provide the age. Recent edits also protect a folder for 408 hours. Separate `make-audio`
 processes coordinate cleanup and cannot run the same case simultaneously. Cleanup is checked
 again after every successful download, so another PDF timing out cannot postpone it. Legacy
 folders count when their narration has exactly the expected number of complete, nonempty MP3s,
@@ -222,7 +223,7 @@ flowchart LR
         Verify[Verify and atomically save download]
         MP3[Local MP3 parts]
         Cleanup[Delete both S3 copies]
-        Retention[After first Polly submission: keep newest 5 and all under 48 hours]
+        Retention[After first Polly submission: keep newest 20 and all active in last 408 hours]
         Trash[Move older completed case folders to Trash]
 
         PDF --> Resolve --> Wrapper --> CLI --> Auth --> Safety --> Docling --> Evidence --> Margins --> Exhibits --> Order --> Citations --> Clean --> Text

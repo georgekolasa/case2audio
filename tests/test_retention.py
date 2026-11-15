@@ -8,6 +8,8 @@ from case2audio import retention
 
 NOW = 2_000_000_000
 DAY = 86400
+RETENTION_HOURS = 408
+RETENTION_SECONDS = RETENTION_HOURS * 3600
 
 
 def make_case(root, name, age, *, status="complete", legacy=False):
@@ -32,32 +34,54 @@ def make_case(root, name, age, *, status="complete", legacy=False):
     return folder, audio
 
 
-def test_keeps_five_newest_and_moves_whole_older_cases_to_trash(tmp_path):
+def test_keeps_twenty_newest_and_moves_whole_older_cases_to_trash(tmp_path):
     root, trash = tmp_path / "generated", tmp_path / "trash"
-    for i in range(7):
-        make_case(root, f"case{i}", (i + 3) * DAY)
+    for i in range(22):
+        # Every case is older than the time window, so this isolates the count rule.
+        make_case(root, f"case{i:02}", RETENTION_SECONDS + (i + 1) * DAY)
     moved = retention.prune_cases(root, now=NOW, trash=trash)
     assert len(moved) == 2
-    assert {p.name for p in root.iterdir() if p.is_dir()} == {f"case{i}" for i in range(5)}
+    assert {p.name for p in root.iterdir() if p.is_dir()} == {f"case{i:02}" for i in range(20)}
+    assert {p.name.split("-")[1] for p in moved} == {"case20", "case21"}
     # The entire case remains recoverable, not just its MP3.
     for folder in moved:
+        assert folder.parent == trash
         assert (folder / "narration.txt").is_file()
         assert (folder / "debug.json").is_file()
         assert len(list(folder.rglob("*.mp3"))) == 1
 
 
-def test_super_day_keeps_all_ten_recent_cases(tmp_path):
-    for i in range(10):
-        make_case(tmp_path / "generated", f"case{i}", i * 3600)
-    assert retention.prune_cases(tmp_path / "generated", now=NOW, trash=tmp_path / "trash") == []
+def test_time_window_keeps_old_cases_beyond_twenty_newest(tmp_path):
+    root, trash = tmp_path / "generated", tmp_path / "trash"
+    for i in range(23):
+        make_case(root, f"case{i:02}", RETENTION_SECONDS + (i + 1) * DAY)
+
+    # These three cases are outside the newest twenty by completion time. Recent
+    # activity must independently protect the exact 408-hour boundary and newer.
+    for index, age in [(21, RETENTION_SECONDS), (22, RETENTION_SECONDS - 1)]:
+        edited = root / f"case{index:02}" / "narration.txt"
+        os.utime(edited, (NOW - age, NOW - age))
+
+    moved = retention.prune_cases(root, now=NOW, trash=trash)
+    assert len(moved) == 1
+    assert moved[0].parent == trash
+    assert moved[0].name.startswith("case2audio-case20-")
+    assert (root / "case21").is_dir()
+    assert (root / "case22").is_dir()
 
 
-@pytest.mark.parametrize("age,removed", [(2 * DAY, False), (2 * DAY + 1, True)])
-def test_age_boundary_is_strictly_more_than_48_hours(tmp_path, age, removed):
+@pytest.mark.parametrize(
+    "age,removed",
+    [(RETENTION_SECONDS, False), (RETENTION_SECONDS + 1, True)],
+)
+def test_time_boundary_is_strictly_more_than_408_hours(tmp_path, age, removed):
     root = tmp_path / "generated"
-    for i in range(5):
+    for i in range(20):
         make_case(root, f"recent{i}", i)
-    folder, _ = make_case(root, "old", age)
+    folder, _ = make_case(root, "old", RETENTION_SECONDS + 100 * DAY)
+    # This old case falls outside the newest twenty; only its latest edit varies.
+    edited = folder / "narration.txt"
+    os.utime(edited, (NOW - age, NOW - age))
     retention.prune_cases(root, now=NOW, trash=tmp_path / "trash")
     assert folder.exists() is not removed
 

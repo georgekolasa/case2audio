@@ -12,8 +12,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
-KEEP_CASES = 5
-MIN_AGE_SECONDS = 2 * 24 * 60 * 60
+KEEP_CASES = 20
+MIN_AGE_HOURS = 408
+MIN_AGE_SECONDS = MIN_AGE_HOURS * 60 * 60
 STATE_FILE = ".audio-state.json"
 
 
@@ -131,7 +132,7 @@ def _candidate(folder: Path):
         completed = max(p.stat().st_mtime for p in audio)
     if any(not p.is_file() or p.stat().st_size <= 0 for p in audio):
         return None
-    # Recent edits and reruns get the same two-day protection as newly completed audio.
+    # Recent edits and reruns get the same protection as newly completed audio.
     latest_activity = max([completed, *(p.stat().st_mtime for p in contents)])
     return completed, latest_activity
 
@@ -157,7 +158,11 @@ def prune_cases(root: Path, *, now: float | None = None, trash: Path | None = No
             target = trash / f"case2audio-{folder.name}-{uuid4().hex}"
             shutil.move(str(folder), str(target))
             moved.append(target)
-            print(f"Local cleanup: moved {folder.name} to Trash (older than 2 days).", flush=True)
+            print(
+                f"Local cleanup: moved {folder.name} to Trash "
+                f"(no activity for over {MIN_AGE_HOURS} hours).",
+                flush=True,
+            )
         if not moved:
             print(
                 f"Local cleanup: checked {len(candidates)} completed case(s); nothing eligible.",

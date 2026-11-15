@@ -34,15 +34,15 @@ def make_case(root, name, age, *, status="complete", legacy=False):
     return folder, audio
 
 
-def test_keeps_twenty_newest_and_moves_whole_older_cases_to_trash(tmp_path):
+def test_keeps_fifteen_newest_and_moves_whole_older_cases_to_trash(tmp_path):
     root, trash = tmp_path / "generated", tmp_path / "trash"
-    for i in range(22):
+    for i in range(17):
         # Every case is older than the time window, so this isolates the count rule.
         make_case(root, f"case{i:02}", RETENTION_SECONDS + (i + 1) * DAY)
     moved = retention.prune_cases(root, now=NOW, trash=trash)
     assert len(moved) == 2
-    assert {p.name for p in root.iterdir() if p.is_dir()} == {f"case{i:02}" for i in range(20)}
-    assert {p.name.split("-")[1] for p in moved} == {"case20", "case21"}
+    assert {p.name for p in root.iterdir() if p.is_dir()} == {f"case{i:02}" for i in range(15)}
+    assert {p.name.split("-")[1] for p in moved} == {"case15", "case16"}
     # The entire case remains recoverable, not just its MP3.
     for folder in moved:
         assert folder.parent == trash
@@ -51,23 +51,23 @@ def test_keeps_twenty_newest_and_moves_whole_older_cases_to_trash(tmp_path):
         assert len(list(folder.rglob("*.mp3"))) == 1
 
 
-def test_time_window_keeps_old_cases_beyond_twenty_newest(tmp_path):
+def test_time_window_keeps_old_cases_beyond_fifteen_newest(tmp_path):
     root, trash = tmp_path / "generated", tmp_path / "trash"
-    for i in range(23):
+    for i in range(18):
         make_case(root, f"case{i:02}", RETENTION_SECONDS + (i + 1) * DAY)
 
-    # These three cases are outside the newest twenty by completion time. Recent
+    # These three cases are outside the newest fifteen by completion time. Recent
     # activity must independently protect the exact 408-hour boundary and newer.
-    for index, age in [(21, RETENTION_SECONDS), (22, RETENTION_SECONDS - 1)]:
+    for index, age in [(16, RETENTION_SECONDS), (17, RETENTION_SECONDS - 1)]:
         edited = root / f"case{index:02}" / "narration.txt"
         os.utime(edited, (NOW - age, NOW - age))
 
     moved = retention.prune_cases(root, now=NOW, trash=trash)
     assert len(moved) == 1
     assert moved[0].parent == trash
-    assert moved[0].name.startswith("case2audio-case20-")
-    assert (root / "case21").is_dir()
-    assert (root / "case22").is_dir()
+    assert moved[0].name.startswith("case2audio-case15-")
+    assert (root / "case16").is_dir()
+    assert (root / "case17").is_dir()
 
 
 @pytest.mark.parametrize(
@@ -76,10 +76,10 @@ def test_time_window_keeps_old_cases_beyond_twenty_newest(tmp_path):
 )
 def test_time_boundary_is_strictly_more_than_408_hours(tmp_path, age, removed):
     root = tmp_path / "generated"
-    for i in range(20):
+    for i in range(15):
         make_case(root, f"recent{i}", i)
     folder, _ = make_case(root, "old", RETENTION_SECONDS + 100 * DAY)
-    # This old case falls outside the newest twenty; only its latest edit varies.
+    # This old case falls outside the newest fifteen; only its latest edit varies.
     edited = folder / "narration.txt"
     os.utime(edited, (NOW - age, NOW - age))
     retention.prune_cases(root, now=NOW, trash=tmp_path / "trash")
@@ -89,18 +89,18 @@ def test_time_boundary_is_strictly_more_than_408_hours(tmp_path, age, removed):
 @pytest.mark.parametrize("status", ["incomplete", "running", "unknown"])
 def test_unfinished_cases_are_never_pruned_or_counted(tmp_path, status):
     root = tmp_path / "generated"
-    for i in range(5):
+    for i in range(15):
         make_case(root, f"recent{i}", i)
-    folder, _ = make_case(root, "unfinished", 9 * DAY, status=status)
+    folder, _ = make_case(root, "unfinished", 30 * DAY, status=status)
     assert retention.prune_cases(root, now=NOW, trash=tmp_path / "trash") == []
     assert folder.is_dir()
 
 
 def test_recent_edit_protects_old_audio(tmp_path):
     root = tmp_path / "generated"
-    for i in range(5):
+    for i in range(15):
         make_case(root, f"recent{i}", i)
-    folder, _ = make_case(root, "old", 9 * DAY)
+    folder, _ = make_case(root, "old", 30 * DAY)
     os.utime(folder / "narration.txt", (NOW, NOW))
     assert retention.prune_cases(root, now=NOW, trash=tmp_path / "trash") == []
 

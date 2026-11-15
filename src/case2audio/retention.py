@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
-KEEP_CASES = 20
+KEEP_CASES = 15
 MIN_AGE_HOURS = 408
 MIN_AGE_SECONDS = MIN_AGE_HOURS * 60 * 60
 STATE_FILE = ".audio-state.json"

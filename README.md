@@ -86,9 +86,9 @@ MP3 lands at `generated/<source-stem>/<source-stem> Case/<source-stem>Case.mp3`.
 Inputs over 95,000 characters produce ordered audio parts.
 
 Before preparing inputs, the batch marks its case folders as active so cleanup cannot remove
-them. After Polly successfully accepts the first audio task, cleanup keeps the **newest 20
+them. After Polly successfully accepts the first audio task, cleanup keeps the **newest 15
 completed cases**, plus **every case completed or edited within the last 408 hours (17 days)**.
-So 25 cases made today all stay. Older completed cases beyond those 20 move as whole folders
+So 25 cases made today all stay. Older completed cases beyond those 15 move as whole folders
 (audio, narration, and debug files) from `generated/` to macOS Trash. This is recoverable;
 **empty Trash to reclaim disk space**. Source files and active case folders are protected.
 Cleanup runs while Polly generates
@@ -223,7 +223,7 @@ flowchart LR
         Verify[Verify and atomically save download]
         MP3[Local MP3 parts]
         Cleanup[Delete both S3 copies]
-        Retention[After first Polly submission: keep newest 20 and all active in last 408 hours]
+        Retention[After first Polly submission: keep newest 15 and all active in last 408 hours]
         Trash[Move older completed case folders to Trash]
 
         PDF --> Resolve --> Wrapper --> CLI --> Auth --> Safety --> Docling --> Evidence --> Margins --> Exhibits --> Order --> Citations --> Clean --> Text

@@ -339,6 +339,52 @@ def test_large_document_copies_each_part_to_a_distinct_name(tmp_path):
     ]
 
 
+@pytest.mark.parametrize("extension", ["pdf", "txt", "rtf"])
+@pytest.mark.parametrize(
+    ("text", "expected_names"),
+    [
+        ("A short narration script.", ["AITransformationRoles1.mp3"]),
+        (
+            "word " * 20_000,
+            [
+                "AITransformationRoles1-part-001.mp3",
+                "AITransformationRoles1-part-002.mp3",
+            ],
+        ),
+    ],
+)
+def test_no_case_names_single_and_multipart_audio_for_every_input_label(
+    tmp_path, extension, text, expected_names
+):
+    session = FakeSession()
+
+    parts = synthesize_to_directory(
+        text,
+        tmp_path,
+        PollyOptions(bucket="example", append_case=False),
+        session=session,
+        label=f"AITransformationRoles1.{extension}",
+    )
+
+    assert [part.path.name for part in parts] == expected_names
+    assert all(part.path.parent == tmp_path for part in parts)
+    assert all(part.path.is_file() for part in parts)
+    assert [call["Key"] for call in session.s3.copy_calls] == [
+        f"case2audio/{name}" for name in expected_names
+    ]
+
+
+def test_no_case_preserves_case_in_the_original_filename(tmp_path):
+    parts = synthesize_to_directory(
+        "Case text.",
+        tmp_path,
+        PollyOptions(bucket="example", append_case=False),
+        session=FakeSession(),
+        label="ActualCase.rtf",
+    )
+    assert parts[0].path.name == "ActualCase.mp3"
+
+
 def test_readable_key_preserves_spaces_and_dots():
     options = PollyOptions(bucket="example", prefix="custom/")
     assert named_audio_key(options, "My case.v2.pdf", 1, 1) == "custom/My case.v2.mp3"

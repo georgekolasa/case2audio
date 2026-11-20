@@ -124,6 +124,29 @@ def test_mixed_batch_preserves_rtf_script_without_invoking_pdf_extraction(batch,
     assert "Processing input 2/2: handwritten-case.RTF" in capsys.readouterr().out
 
 
+def test_no_case_uses_plain_source_stems_for_pdf_txt_and_rtf(batch, capsys):
+    pdf = batch.inputs[0]
+    text_file = pdf.with_name("handwritten-case.TXT")
+    rtf_file = pdf.with_name("handwritten-notesCase.RTF")
+    text_file.write_text("This is a valid authored narration script.", encoding="utf-8")
+    rtf_file.write_text(
+        r"{\rtf1\ansi This is a valid authored RTF narration script.}", encoding="utf-8"
+    )
+    inputs = [pdf, text_file, rtf_file]
+    batch.args.inputs = inputs
+    batch.args.no_case = True
+
+    assert cli._handle_make(batch.args) == 0
+
+    calls = {call.kwargs["label"]: call for call in batch.synthesize.call_args_list}
+    assert set(calls) == {path.name for path in inputs}
+    for source in inputs:
+        call = calls[source.name]
+        assert call.args[1] == batch.args.output_dir / source.stem / source.stem
+    # A source name that already ends in Case must keep that part of its original name.
+    assert f"Processing input 3/3: {rtf_file.name}" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize(
     ("filename", "contents", "error"),
     [

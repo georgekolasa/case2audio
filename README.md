@@ -88,6 +88,19 @@ MP3 lands at `generated/<source-stem>/<source-stem> Case/<source-stem>Case.mp3`.
 `generated/ManEcon_Audio_Review_Script/ManEcon_Audio_Review_Script Case/ManEcon_Audio_Review_ScriptCase.mp3`.
 Inputs over 95,000 characters produce ordered audio parts.
 
+Add `-nc` (or `--no-case`) after the filenames to leave `Case` off the local audio folder and
+MP3. For example:
+
+```bash
+./make-audio AITransformationRoles1.rtf -nc
+```
+
+This saves audio to
+`generated/AITransformationRoles1/AITransformationRoles1/AITransformationRoles1.mp3`.
+For a batch, the option applies to every input; numbered parts keep their `-part-001` suffix.
+Only the appended `Case` is omitted; a `Case` already in the source filename is preserved.
+The narration path, S3 names, and cleanup rules are unchanged.
+
 Before preparing inputs, the batch marks its case folders as active so cleanup cannot remove
 them. After Polly successfully accepts the first audio task, cleanup keeps the **newest 15
 completed cases**, plus **every case completed or edited within the last 408 hours (17 days)**.

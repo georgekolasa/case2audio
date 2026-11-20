@@ -139,6 +139,27 @@ def test_wrapper_forwards_mixed_inputs_and_shared_options(tmp_path):
     assert "--no-ocr" in command
 
 
+def test_wrapper_forwards_no_case_after_input_without_running_aws(tmp_path):
+    source = tmp_path / "AITransformationRoles1.rtf"
+    source.touch()
+    config = tmp_path / "config.env"
+    config.write_text("CASE2AUDIO_BUCKET=example\n")
+
+    result = subprocess.run(
+        ["bash", str(WRAPPER), "--dry-run", f"./{source.name}", "-nc"],
+        env={**os.environ, "CASE2AUDIO_CONFIG": str(config)},
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    command = shlex.split(result.stdout.removeprefix("Would run:"))
+
+    assert command[1:4] == ["-m", "case2audio.cli", "make"]
+    assert command[4] == str(source.resolve())
+    assert command[-1] == "-nc"
+
+
 def test_wrapper_checks_second_input_before_launching_cli(tmp_path):
     first = tmp_path / "valid.pdf"
     first.touch()

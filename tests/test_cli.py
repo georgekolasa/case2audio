@@ -2,7 +2,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from case2audio.cli import _enforce_quality, build_parser
+from case2audio.cli import _enforce_quality, _polly_options, build_parser
 from case2audio.errors import Case2AudioError
 from case2audio.quality import ExtractionSignals, assess_narration
 
@@ -41,6 +41,21 @@ def test_make_uses_generic_inputs_positional_name(tmp_path):
 
     assert args.inputs == [first, second]
     assert not hasattr(args, "pdfs")
+
+
+@pytest.mark.parametrize("flag", ["-nc", "--no-case"])
+def test_make_accepts_no_case_flag(flag):
+    args = build_parser().parse_args(["make", "source.rtf", "--bucket", "example", flag])
+
+    assert args.no_case is True
+    assert _polly_options(args).append_case is False
+
+
+def test_make_keeps_case_suffix_by_default():
+    args = build_parser().parse_args(["make", "source.pdf", "--bucket", "example"])
+
+    assert args.no_case is False
+    assert _polly_options(args).append_case is True
 
 
 def test_extract_defaults_are_narration_friendly() -> None:

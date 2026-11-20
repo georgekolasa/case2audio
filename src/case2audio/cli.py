@@ -64,6 +64,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     make.add_argument("--drop-regex", action="append", default=[])
     make.add_argument(
+        "-nc",
+        "--no-case",
+        action="store_true",
+        help="Omit the appended 'Case' from local audio folder and filenames.",
+    )
+    make.add_argument(
         "--jobs",
         type=int,
         default=20,
@@ -313,7 +319,7 @@ def _prepare_input(args: argparse.Namespace, source: Path) -> tuple[str, Path]:
     # steps (chunking, workers, download verification, retention) remain shared.
     narration_path.write_text(narration, encoding="utf-8")
     print(f"Saved narration: {narration_path.resolve()} ({len(narration):,} characters)")
-    return narration, job_dir / f"{source.stem} Case"
+    return narration, _audio_directory(job_dir, source, args.no_case)
 
 
 def _prepare_pdf(args: argparse.Namespace, pdf: Path) -> tuple[str, Path]:
@@ -334,7 +340,12 @@ def _prepare_pdf(args: argparse.Namespace, pdf: Path) -> tuple[str, Path]:
     _print_quality(result.quality_report)
     # Save all local diagnostics first, but never submit unsafe text to a paid service.
     _enforce_quality(result.quality_report)
-    return result.narration, job_dir / f"{pdf.stem} Case"
+    return result.narration, _audio_directory(job_dir, pdf, args.no_case)
+
+
+def _audio_directory(job_dir: Path, source: Path, no_case: bool) -> Path:
+    # Use the source stem for both paths; never strip 'Case' already present in the filename.
+    return job_dir / f"{source.stem}{'' if no_case else ' Case'}"
 
 
 def _polly_options(args: argparse.Namespace):
@@ -347,6 +358,8 @@ def _polly_options(args: argparse.Namespace):
         prefix=args.prefix,
         voice=args.voice,
         engine=args.engine,
+        # The speak command has no naming flag and retains its existing behavior.
+        append_case=not getattr(args, "no_case", False),
     )
 
 

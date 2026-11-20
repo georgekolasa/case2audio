@@ -64,6 +64,7 @@ class PollyOptions:
     poll_seconds: float = 5.0
     # Long generative tasks need more time; each part gets its own deadline.
     timeout_seconds: float = 25 * 60.0
+    append_case: bool = True
 
 
 @dataclass(frozen=True)
@@ -247,7 +248,8 @@ def synthesize_to_directory(
         # Named downloads remain recognizable when copied out of their case folder.
         if label:
             suffix = f"-part-{index:03d}" if len(chunks) > 1 else ""
-            filename = f"{Path(label).stem}Case{suffix}.{extension}"
+            case_suffix = "Case" if options.append_case else ""
+            filename = f"{Path(label).stem}{case_suffix}{suffix}.{extension}"
         else:
             filename = f"part-{index:03d}.{extension}"
         part_path = output_dir / filename

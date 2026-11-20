@@ -106,7 +106,11 @@ def test_wrapper_rejects_a_missing_input_before_calling_aws() -> None:
 
 
 def test_wrapper_forwards_mixed_inputs_and_shared_options(tmp_path):
-    inputs = [tmp_path / "first case.PDF", tmp_path / "second case.txt"]
+    inputs = [
+        tmp_path / "first case.PDF",
+        tmp_path / "second case.txt",
+        tmp_path / "third case.RTF",
+    ]
     for path in inputs:
         path.touch()
     config = tmp_path / "config.env"
@@ -118,6 +122,7 @@ def test_wrapper_forwards_mixed_inputs_and_shared_options(tmp_path):
             "--dry-run",
             f"./{inputs[0].name}",
             str(inputs[1]),
+            str(inputs[2]),
             "--drop-regex",
             "^confidential course copy$",
         ],
@@ -129,7 +134,7 @@ def test_wrapper_forwards_mixed_inputs_and_shared_options(tmp_path):
     )
     command = shlex.split(result.stdout.removeprefix("Would run:"))
     assert command[1:4] == ["-m", "case2audio.cli", "make"]
-    assert command[4:6] == [str(path.resolve()) for path in inputs]
+    assert command[4:7] == [str(path.resolve()) for path in inputs]
     assert command[-2:] == ["--drop-regex", "^confidential course copy$"]
     assert "--no-ocr" in command
 

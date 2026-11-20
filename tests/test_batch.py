@@ -76,29 +76,52 @@ def test_batch_preserves_order_and_separate_outputs_with_one_login(batch, capsys
     assert "Processing input 2/2: sfn.pdf" in capsys.readouterr().out
 
 
-def test_mixed_batch_preserves_script_without_invoking_pdf_extraction(batch, capsys):
+def test_mixed_batch_preserves_text_script_without_pdf_cleanup(batch):
     pdf, _ = batch.inputs
     text_file = pdf.with_name("handwritten-case.TXT")
-    # These resemble PDF furniture and citations, but an authored script owns its wording.
+    # Authored scripts own their wording, including text that looks like PDF furniture.
     script = "References\n\nOriginal narration (Smith et al., 2024).\n\nCopyright 2024.\n"
     text_file.write_text(script, encoding="utf-8")
-    batch.inputs = [pdf, text_file]
+    batch.args.inputs = [pdf, text_file]
+
+    assert cli._handle_make(batch.args) == 0
+    assert [call.args[0] for call in batch.extract.call_args_list] == [pdf]
+    assert (batch.args.output_dir / text_file.stem / "narration.txt").read_text() == script
+
+
+def test_mixed_batch_preserves_rtf_script_without_invoking_pdf_extraction(batch, capsys):
+    pdf, _ = batch.inputs
+    rtf_file = pdf.with_name("handwritten-case.RTF")
+    # Escaped braces, punctuation, and Unicode exercise real RTF decoding without a fixture file.
+    rtf = (
+        r"{\rtf1\ansi\deff0 This is caf\'e9; preserve \{literal braces\}, "
+        r"punctuation \u8212? and apostrophes!\par Second line: \u233? "
+        r"Rocket: \u-10179?\u-8576?\par References: (Smith et al., 2024).}"
+    )
+    expected_script = (
+        "This is café; preserve {literal braces}, punctuation — and apostrophes!\n"
+        "Second line: é Rocket: 🚀\nReferences: (Smith et al., 2024)."
+    )
+    rtf_file.write_text(rtf, encoding="utf-8")
+    batch.inputs = [pdf, rtf_file]
     batch.args.inputs = list(batch.inputs)
 
     assert cli._handle_make(batch.args) == 0
 
     assert [call.args[0] for call in batch.extract.call_args_list] == [pdf]
-    assert (batch.args.output_dir / text_file.stem / "narration.txt").read_text() == script
+    assert (
+        batch.args.output_dir / rtf_file.stem / "narration.txt"
+    ).read_text() == expected_script
     text_call = next(
         call
         for call in batch.synthesize.call_args_list
-        if call.args[1].parent.name == text_file.stem
+        if call.args[1].parent.name == rtf_file.stem
     )
-    assert text_call.args[0] == script
+    assert text_call.args[0] == expected_script
     assert text_call.args[1] == (
-        batch.args.output_dir / text_file.stem / f"{text_file.stem} Case"
+        batch.args.output_dir / rtf_file.stem / f"{rtf_file.stem} Case"
     )
-    assert "Processing input 2/2: handwritten-case.TXT" in capsys.readouterr().out
+    assert "Processing input 2/2: handwritten-case.RTF" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
@@ -108,6 +131,16 @@ def test_mixed_batch_preserves_script_without_invoking_pdf_extraction(batch, cap
         ("empty.txt", b"", "quality gate"),
         ("corrupt.txt", b"123 234 345 " * 100, "quality gate"),
         ("undecodable.txt", b"\xff\xfe", "read|decode|UTF-8"),
+        ("malformed.RTF", b"not an RTF document", "RTF"),
+        ("truncated.RTF", b"{\\rtf1\\ansi Unclosed group", "RTF"),
+        ("binary.RTF", b"{\\rtf1\\ansi \\bin3 abc}", "RTF"),
+        ("deleted.RTF", b"{\\rtf1\\ansi Visible \\deleted discarded}", "RTF"),
+        ("unknown-codepage.RTF", b"{\\rtf1\\ansi\\ansicpg99999 Text}", "RTF"),
+        (
+            "hidden.RTF",
+            b"{\\rtf1\\ansi Visible text {\\v secret hidden} more visible text}",
+            "RTF",
+        ),
     ],
 )
 def test_invalid_text_batch_item_never_reaches_synthesis(batch, filename, contents, error):
@@ -120,6 +153,35 @@ def test_invalid_text_batch_item_never_reaches_synthesis(batch, filename, conten
         cli._handle_make(batch.args)
 
     batch.synthesize.assert_not_called()
+
+
+def test_unreadable_rtf_batch_item_never_reaches_synthesis(batch, monkeypatch):
+    rtf_file = batch.inputs[0].with_suffix(".RTF")
+    rtf_file.write_text(r"{\rtf1\ansi Safe body.}", encoding="utf-8")
+    batch.args.inputs[0] = rtf_file
+    original_read_bytes = type(rtf_file).read_bytes
+
+    def fail_read(path, *args, **kwargs):
+        if path == rtf_file:
+            raise PermissionError("fixture denies reading")
+        return original_read_bytes(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(rtf_file), "read_bytes", fail_read)
+
+    with pytest.raises(Case2AudioError, match="Could not read.*RTF"):
+        cli._handle_make(batch.args)
+
+    batch.synthesize.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "data",
+    [b"{\\rtf1\\ansi\\ansicpg1252 caf\xe9}", b"{\\rtf1\\mac caf\x8e}"],
+)
+def test_rtf_decodes_declared_character_set(tmp_path, data):
+    path = tmp_path / "case.rtf"
+    path.write_bytes(data)
+    assert cli._read_narration(path) == "café"
 
 
 @pytest.mark.parametrize("invalid", ["missing", "duplicate", "extension"])

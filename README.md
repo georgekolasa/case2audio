@@ -1,9 +1,11 @@
 # case2audio
 
-Turn PDFs or UTF-8 text files into narration text, then send that text to Amazon Polly
-and download the MP3. PDFs go through document extraction and cleanup; `.txt` files go
-straight to the shared quality checks and audio flow, with their text preserved apart
-from removing a leading UTF-8 BOM and normalizing newlines.
+Turn PDFs, UTF-8 text files, or RTF documents into narration text, then send that text to Amazon
+Polly and download the MP3. PDFs go through document extraction and cleanup; `.txt` and `.rtf`
+scripts go straight to the shared quality checks and audio flow. Text files retain their wording;
+RTF formatting is removed locally while the document's text is kept.
+RTF files containing hidden/deleted text or embedded binary payloads are rejected so unseen
+content or malformed text cannot accidentally be narrated; export them as plain text first.
 
 ## Run it
 
@@ -11,10 +13,11 @@ from removing a leading UTF-8 BOM and normalizing newlines.
 ./make-audio bb.pdf
 ```
 
-Text files work the same way:
+Text and RTF files work the same way:
 
 ```bash
 ./make-audio ManEcon_Audio_Review_Script.txt
+./make-audio AITransformationRoles1.rtf
 ```
 
 You can also pass an explicit path, including a file under the repository's `input/` folder:
@@ -23,7 +26,7 @@ You can also pass an explicit path, including a file under the repository's `inp
 ./make-audio input/ManEcon_Audio_Review_Script.txt
 ```
 
-Or process several PDFs and text files with one command:
+Or process several PDFs, text, and RTF files with one command:
 
 ```bash
 ./make-audio bb.pdf ManEcon_Audio_Review_Script.txt
@@ -78,7 +81,7 @@ Recovery also handles AWS's `CreateOAuth2Token` invalid/expired authorization-gr
 Valid sessions proceed without browser login; AWS can still require sign-in when a session
 expires or is revoked.
 
-For either source type, the reviewed text is `generated/<source-stem>/narration.txt`, and the
+For any source type, the reviewed text is `generated/<source-stem>/narration.txt`, and the
 MP3 lands at `generated/<source-stem>/<source-stem> Case/<source-stem>Case.mp3`. For example,
 `ManEcon_Audio_Review_Script.txt` produces
 `generated/ManEcon_Audio_Review_Script/narration.txt` and
@@ -200,6 +203,7 @@ flowchart LR
     subgraph local[Your machine]
         PDF[Source PDF]
         TXT[UTF-8 .txt source]
+        RTF[Rich text .rtf source]
         Resolve[Resolve bare name: input/ first, then Downloads]
         Wrapper[make-audio wrapper]
         Setup[If needed: prepare local Python and dependencies]
@@ -208,6 +212,7 @@ flowchart LR
         Safety[Visual-redaction safety scan]
         Docling[Docling extraction and optional OCR]
         Bypass[Read text directly; remove BOM and normalize newlines]
+        ConvertRTF[Convert RTF to plain text locally]
         OCR[Corrupt text: retry once with local full-page OCR]
         Evidence[Original PDF spacing, punctuation, and raised markers]
         Margins[Remove front matter and margin text]
@@ -229,7 +234,9 @@ flowchart LR
         PDF --> Resolve --> Wrapper --> CLI --> Auth --> Safety --> Docling --> Evidence --> Margins --> Exhibits --> Order --> Citations --> Clean --> Text
         Wrapper -. missing environment .-> Setup --> CLI
         TXT --> Resolve
+        RTF --> Resolve
         Auth --> Bypass --> Text
+        Auth --> ConvertRTF --> Text
         Text --> Quality --> Split
         Docling -. corrupt text .-> OCR --> Evidence
         Download --> Verify --> MP3 --> Cleanup
@@ -261,9 +268,9 @@ The responsibilities are deliberately separated:
   `scripts/bootstrap.sh`, and invokes the CLI through the local Python. Shared `runtime.sh`
   checks avoid loading Docling models just to check the install. Help and dry runs need no Python
   environment. PDFs
-  follow the extraction flow below; UTF-8 `.txt` inputs bypass Docling, OCR, and PDF-specific
-  cleanup so their wording is retained apart from BOM removal and newline normalization. Both
-  types share the quality gate, Polly chunking, concurrency, output layout, and retention rules.
+  follow the extraction flow below; UTF-8 `.txt` and `.rtf` inputs bypass Docling, OCR, and
+  PDF-specific cleanup. RTF formatting is removed locally; text content goes through the same
+  quality gate, Polly chunking, concurrency, output layout, and retention rules as other inputs.
   Multiple paths form a batch with one session check and separate outputs. Bare filenames resolve
   from `input/` when present, then `~/Downloads`; explicit paths keep their supplied location.
 - `retention.py` records case completion and runs local cleanup after Polly accepts the first task,

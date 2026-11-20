@@ -12,11 +12,11 @@ usage() {
   cat <<'EOF'
 Usage: ./make-audio [--ocr] [--dry-run] INPUT [INPUT ...] [case2audio make options]
 
-Turn PDFs or UTF-8 .txt scripts into separate Matthew Generative audio.
+Turn PDFs, UTF-8 .txt scripts, or .rtf files into separate Matthew Generative audio.
 List all inputs before shared case2audio options. Up to 20 inputs run through Polly at once.
 Use --jobs 1 after the inputs for sequential processing.
 Bare filenames use this project's input/ folder first, then ~/Downloads.
-Use ./file.txt or ./file.pdf for the current directory.
+Use ./file.txt, ./file.rtf, or ./file.pdf for the current directory.
 
   --ocr       Enable OCR for a scanned/image-only PDF.
   --dry-run   Print the command without extracting or calling AWS.
@@ -26,6 +26,7 @@ Examples:
   ./make-audio case.pdf
   ./make-audio bb.pdf sfn.pdf
   ./make-audio ManEcon_Audio_Review_Script.txt
+  ./make-audio AITransformationRoles1.rtf
   ./make-audio input/review.txt case.pdf
   ./make-audio --ocr scanned-case.pdf
   ./make-audio ./case.pdf --drop-regex '^confidential$'

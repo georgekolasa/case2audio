@@ -17,7 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="case2audio",
-        description="Turn PDFs or existing text files into Amazon Polly narration.",
+        description="Turn PDFs, text, or RTF files into Amazon Polly narration.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -41,16 +41,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     extract.set_defaults(handler=_handle_extract)
 
-    speak = subparsers.add_parser("speak", help="Send an existing text file to Polly.")
+    speak = subparsers.add_parser("speak", help="Send an existing text or RTF script to Polly.")
     speak.add_argument("text", type=Path)
     _add_polly_arguments(speak)
     speak.set_defaults(handler=_handle_speak)
 
     make = subparsers.add_parser(
-        "make", help="Process PDFs or text files into audio, with overlapping Polly jobs."
+        "make", help="Process PDFs, text, or RTF files into audio, with overlapping Polly jobs."
     )
     make.add_argument(
-        "inputs", type=Path, nargs="+", help="Source .pdf or UTF-8 .txt files, then shared options."
+        "inputs",
+        type=Path,
+        nargs="+",
+        help="Source .pdf, .txt, or .rtf files, then shared options.",
     )
     _add_polly_arguments(make)
     make.add_argument("--no-ocr", action="store_true", help="Skip OCR for born-digital PDFs.")
@@ -125,18 +128,23 @@ def _handle_speak(args: argparse.Namespace) -> int:
 
 
 def _read_narration(path: Path) -> str:
-    """Load an existing script without applying PDF-specific removal or repair rules."""
+    """Load a text or RTF script without applying PDF-specific removal or repair rules."""
 
     from .quality import ExtractionSignals, assess_narration
 
     if not path.is_file():
         raise Case2AudioError(f"Text file not found: {path}")
     try:
-        # Some editors prepend a UTF-8 BOM; it is an encoding marker, not spoken content.
-        # Do not guess other encodings: misdecoded text could silently become paid narration.
-        text = path.read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeError) as exc:
-        raise Case2AudioError(f"Could not read UTF-8 text file {path}: {exc}") from exc
+        if path.suffix.lower() == ".rtf":
+            from .rtf import read_rtf
+
+            text = read_rtf(path)
+        else:
+            # Do not guess plain-text encodings: misdecoded text could become paid narration.
+            text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError, ValueError, LookupError) as exc:
+        kind = "RTF" if path.suffix.lower() == ".rtf" else "UTF-8 text"
+        raise Case2AudioError(f"Could not read {kind} file {path}: {exc}") from exc
     # Reuse the existing speak gate, but never strip citations/headings from a supplied script.
     report = assess_narration(text, signals=ExtractionSignals())
     _print_quality(report)
@@ -163,8 +171,8 @@ def _handle_make(args: argparse.Namespace) -> int:
     for source in args.inputs:
         if not source.is_file():
             raise Case2AudioError(f"Input not found: {source}")
-        if source.suffix.lower() not in {".pdf", ".txt"}:
-            raise Case2AudioError(f"Expected a .pdf or .txt file: {source}")
+        if source.suffix.lower() not in {".pdf", ".txt", ".rtf"}:
+            raise Case2AudioError(f"Expected a .pdf, .txt, or .rtf file: {source}")
         if source.stem.casefold() in outputs:
             raise Case2AudioError(
                 f"Inputs share an output folder name ({source.stem!r}). Rename one before batching."
@@ -293,7 +301,7 @@ def _handle_make(args: argparse.Namespace) -> int:
 
 
 def _prepare_input(args: argparse.Namespace, source: Path) -> tuple[str, Path]:
-    """Join text scripts to the existing batch flow without loading the PDF parser."""
+    """Join text and RTF scripts to the existing batch flow without loading the PDF parser."""
 
     if source.suffix.lower() == ".pdf":
         return _prepare_pdf(args, source)

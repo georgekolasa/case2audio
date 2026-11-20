@@ -22,7 +22,7 @@ case2audio_runtime_ready() {
   "$repo_dir/.venv/bin/python" -c '
 import sys
 from importlib.util import find_spec
-modules = ["case2audio", "docling", "boto3", "pypdfium2"]
+modules = ["case2audio", "docling", "boto3", "pypdfium2", "striprtf"]
 if sys.platform == "darwin":
     modules.append("ocrmac")
 raise SystemExit(not all(find_spec(module) is not None for module in modules))

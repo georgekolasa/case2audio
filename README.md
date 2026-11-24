@@ -32,11 +32,19 @@ Or process several PDFs, text, and RTF files with one command:
 ./make-audio bb.pdf ManEcon_Audio_Review_Script.txt
 ```
 
-For a bare filename, `make-audio` first looks in the repository's `input/` folder and uses
-that file if it exists; otherwise it looks in `~/Downloads`. Explicit paths keep their
-supplied location: `./bb.pdf` uses the current directory, and `~/Documents/bb.pdf` or an
-absolute path uses that location. You can mix filenames and explicit paths in one command.
-Quote filenames containing spaces, e.g. `"my case.pdf"`.
+You can leave off file extensions:
+
+```bash
+./make-audio 12-01-Marketing-Case1 12-01-Marketing-Case2
+```
+
+For each extensionless name, the command tries `.pdf` first, then `.rtf`, then `.txt`.
+Bare filenames search the repository's `input/` folder and `~/Downloads` for each extension,
+in that order. Thus a PDF in Downloads takes priority over an RTF in `input/`; for the same
+extension, `input/` wins. If you supply an extension, only that exact filename is used.
+Explicit paths stay in their supplied location, whether or not you include an extension:
+`./bb` searches the current directory, while `~/Documents/bb` searches Documents. You can mix
+filenames and paths in one command. Quote names containing spaces, e.g. `"my case"`.
 
 PDF extraction runs one at a time, but **up to 20 files process through Polly concurrently**.
 While Polly generates audio for one source, the command prepares the next source and starts
@@ -217,7 +225,7 @@ flowchart LR
         PDF[Source PDF]
         TXT[UTF-8 .txt source]
         RTF[Rich text .rtf source]
-        Resolve[Resolve bare name: input/ first, then Downloads]
+        Resolve[Resolve file type: PDF, RTF, TXT; input/ then Downloads]
         Wrapper[make-audio wrapper]
         Setup[If needed: prepare local Python and dependencies]
         CLI[case2audio make]
@@ -284,8 +292,9 @@ The responsibilities are deliberately separated:
   follow the extraction flow below; UTF-8 `.txt` and `.rtf` inputs bypass Docling, OCR, and
   PDF-specific cleanup. RTF formatting is removed locally; text content goes through the same
   quality gate, Polly chunking, concurrency, output layout, and retention rules as other inputs.
-  Multiple paths form a batch with one session check and separate outputs. Bare filenames resolve
-  from `input/` when present, then `~/Downloads`; explicit paths keep their supplied location.
+  Multiple paths form a batch with one session check and separate outputs. Extensionless inputs
+  try PDF, RTF, then TXT; bare names check `input/` then `~/Downloads` for each type, and explicit
+  paths keep their supplied location.
 - `retention.py` records case completion and runs local cleanup after Polly accepts the first task,
   while Polly generates audio. The batch marks its case folders active before input preparation;
   a filesystem lock protects running batches, and uncertain or incomplete outputs are never pruned.

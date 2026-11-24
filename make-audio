@@ -16,7 +16,8 @@ Turn PDFs, UTF-8 .txt scripts, or .rtf files into separate Matthew Generative au
 List all inputs before shared case2audio options. Up to 20 inputs run through Polly at once.
 Use --jobs 1 after the inputs for sequential processing.
 Use -nc after the inputs to omit "Case" from local audio names.
-Bare filenames use this project's input/ folder first, then ~/Downloads.
+For each file type, bare filenames check input/ first, then ~/Downloads.
+Without an extension, try .pdf, then .rtf, then .txt.
 Use ./file.txt, ./file.rtf, or ./file.pdf for the current directory.
 
   --ocr       Enable OCR for a scanned/image-only PDF.
@@ -26,6 +27,7 @@ Use ./file.txt, ./file.rtf, or ./file.pdf for the current directory.
 Examples:
   ./make-audio case.pdf
   ./make-audio bb.pdf sfn.pdf
+  ./make-audio bb sfn
   ./make-audio ManEcon_Audio_Review_Script.txt
   ./make-audio AITransformationRoles1.rtf
   ./make-audio AITransformationRoles1.rtf -nc
@@ -67,19 +69,54 @@ fi
 inputs=()
 # Validate every input before starting work, so a typo in the second path costs nothing.
 while [[ $# -gt 0 && "$1" != -* ]]; do
-  source_path="$1"
+  source_arg="$1"
   shift
-  # Dropped-in sources take priority; Downloads remains the fallback for existing commands.
-  # A slash always makes the caller's location explicit, even outside this repository.
-  if [[ "$source_path" != */* ]]; then
-    if [[ -f "$repo_dir/input/$source_path" ]]; then
-      source_path="$repo_dir/input/$source_path"
-    else
-      source_path="$HOME/Downloads/$source_path"
-    fi
+  # Look at the filename, not dots in its parent directory, to detect an explicit extension.
+  filename="${source_arg##*/}"
+  if [[ -z "$filename" || "$filename" == "." || "$filename" == ".." ]]; then
+    echo "Input not found: $source_arg" >&2
+    exit 2
   fi
-  if [[ ! -f "$source_path" ]]; then
-    echo "Input not found: $source_path" >&2
+  if [[ "${filename#.}" == *.* ]]; then
+    extensions=("")
+  else
+    # Prefer file type first across locations; uppercase variants also work on Linux.
+    extensions=(pdf rtf txt)
+  fi
+  if [[ "$source_arg" == */* ]]; then
+    # An explicit path must never silently pick a different folder.
+    candidates=("$source_arg")
+  else
+    # For the same extension, project inputs take priority over Downloads.
+    candidates=("$repo_dir/input/$source_arg" "$HOME/Downloads/$source_arg")
+  fi
+  source_path=""
+  for extension in "${extensions[@]}"; do
+    # Check both common spellings within each location before moving to the next one.
+    case "$extension" in
+      pdf) variants=(.pdf .PDF) ;;
+      rtf) variants=(.rtf .RTF) ;;
+      txt) variants=(.txt .TXT) ;;
+      *) variants=("") ;;
+    esac
+    for candidate in "${candidates[@]}"; do
+      for variant in "${variants[@]}"; do
+        if [[ -f "$candidate$variant" ]]; then
+          source_path="$candidate$variant"
+          break 3
+        fi
+      done
+    done
+  done
+  if [[ -z "$source_path" ]]; then
+    if [[ ${#extensions[@]} -gt 1 ]]; then
+      echo "Input not found: $source_arg (tried .pdf, .rtf, and .txt)" >&2
+    else
+      echo "Input not found: $source_arg" >&2
+    fi
+    if [[ "$source_arg" != */* ]]; then
+      echo "Searched the project's input/ folder and ~/Downloads." >&2
+    fi
     exit 2
   fi
   # Resolve paths before changing directories and keep spaces intact in the array.

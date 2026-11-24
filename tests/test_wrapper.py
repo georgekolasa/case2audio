@@ -4,6 +4,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WRAPPER = REPO_ROOT / "make-audio"
 
@@ -200,3 +202,171 @@ def test_wrapper_prefers_matching_repo_input_for_bare_name_and_keeps_explicit_pa
     command = shlex.split(result.stdout.removeprefix("Would run:"))
     assert command[1:4] == ["-m", "case2audio.cli", "make"]
     assert command[4:6] == [str(bare.resolve()), str(explicit.resolve())]
+
+
+def _isolated_wrapper_fixture(tmp_path):
+    """Copy just the shell wrapper into an offline checkout with a private home."""
+    # A private checkout and HOME keep lookup tests away from real inputs and AWS state.
+    repo = tmp_path / "checkout.with dots"
+    repo.mkdir()
+    shutil.copy(WRAPPER, repo / "make-audio")
+    shutil.copytree(REPO_ROOT / "scripts", repo / "scripts")
+    (repo / ".case2audio.env").write_text("CASE2AUDIO_BUCKET=test-bucket\n")
+    input_dir = repo / "input"
+    input_dir.mkdir()
+    home = tmp_path / "home.with dots"
+    (home / "Downloads").mkdir(parents=True)
+    return repo, input_dir, home
+
+
+def _dry_run_wrapper(repo, home, *args, cwd=None):
+    # The wrapper's dry-run path prints arguments without bootstrapping Python or AWS.
+    result = subprocess.run(
+        ["bash", str(repo / "make-audio"), "--dry-run", *map(str, args)],
+        env={
+            **os.environ,
+            "HOME": str(home),
+            "CASE2AUDIO_CONFIG": str(repo / ".case2audio.env"),
+        },
+        cwd=cwd or repo,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result
+
+
+def _dry_run_command(result):
+    assert result.returncode == 0, result.stderr
+    return shlex.split(result.stdout.removeprefix("Would run:"))
+
+
+def test_wrapper_extensionless_lookup_checks_extension_priority_across_both_dirs(tmp_path):
+    repo, input_dir, home = _isolated_wrapper_fixture(tmp_path)
+    # Extension priority beats folder priority: a Downloads PDF beats input RTF/TXT.
+    expected = home / "Downloads" / "case notes.pdf"
+    expected.touch()
+    (input_dir / "case notes.rtf").touch()
+    (input_dir / "case notes.txt").touch()
+
+    command = _dry_run_command(_dry_run_wrapper(repo, home, "case notes"))
+
+    assert command[4] == str(expected.resolve())
+
+
+def test_wrapper_extensionless_lookup_falls_back_to_rtf_before_txt(tmp_path):
+    repo, input_dir, home = _isolated_wrapper_fixture(tmp_path)
+    expected = home / "Downloads" / "fallback.rtf"
+    expected.touch()
+    (input_dir / "fallback.txt").touch()
+
+    command = _dry_run_command(_dry_run_wrapper(repo, home, "fallback"))
+
+    assert command[4] == str(expected.resolve())
+
+
+def test_wrapper_extensionless_lookup_accepts_uppercase_extension(tmp_path):
+    repo, input_dir, home = _isolated_wrapper_fixture(tmp_path)
+    # Case-insensitive filesystems satisfy lowercase probes too, so they cannot cover this branch.
+    case_probe = input_dir / "case-probe"
+    case_probe.touch()
+    if (input_dir / "CASE-PROBE").exists():
+        pytest.skip("filesystem is case-insensitive")
+    expected = input_dir / "legacy.RTF"
+    expected.touch()
+
+    command = _dry_run_command(_dry_run_wrapper(repo, home, "legacy"))
+
+    assert command[4] == str(expected.resolve())
+
+
+def test_wrapper_extensionless_lookup_uses_txt_as_last_fallback(tmp_path):
+    repo, input_dir, home = _isolated_wrapper_fixture(tmp_path)
+    expected = input_dir / "last resort.txt"
+    expected.touch()
+
+    command = _dry_run_command(_dry_run_wrapper(repo, home, "last resort"))
+
+    assert command[4] == str(expected.resolve())
+
+
+def test_wrapper_extensionless_lookup_prefers_input_for_same_extension(tmp_path):
+    repo, input_dir, home = _isolated_wrapper_fixture(tmp_path)
+    expected = input_dir / "same name.rtf"
+    expected.touch()
+    (home / "Downloads" / "same name.rtf").touch()
+
+    command = _dry_run_command(_dry_run_wrapper(repo, home, "same name"))
+
+    assert command[4] == str(expected.resolve())
+
+
+def test_wrapper_explicit_extension_keeps_exact_file_and_forwards_no_case(tmp_path):
+    repo, input_dir, home = _isolated_wrapper_fixture(tmp_path)
+    expected = input_dir / "exact choice.rtf"
+    expected.touch()
+    # Competing extensions must not replace an explicitly named RTF input.
+    (input_dir / "exact choice.pdf").touch()
+    (home / "Downloads" / "exact choice.pdf").touch()
+
+    command = _dry_run_command(
+        _dry_run_wrapper(repo, home, "exact choice.rtf", "-nc")
+    )
+
+    assert command[4] == str(expected.resolve())
+    assert command[-1] == "-nc"
+
+
+def test_wrapper_explicit_extensionless_path_searches_only_its_own_directory(tmp_path):
+    repo, input_dir, home = _isolated_wrapper_fixture(tmp_path)
+    explicit_dir = tmp_path / "client.folder with spaces"
+    explicit_dir.mkdir()
+    expected = explicit_dir / "meeting.pdf"
+    expected.touch()
+    (input_dir / "meeting.pdf").touch()
+    (home / "Downloads" / "meeting.pdf").touch()
+
+    command = _dry_run_command(
+        _dry_run_wrapper(repo, home, "./client.folder with spaces/meeting", cwd=tmp_path)
+    )
+
+    assert command[4] == str(expected.resolve())
+
+
+def test_wrapper_missing_explicit_path_does_not_fall_back_to_downloads(tmp_path):
+    repo, input_dir, home = _isolated_wrapper_fixture(tmp_path)
+    (input_dir / "meeting.pdf").touch()
+    (home / "Downloads" / "meeting.pdf").touch()
+
+    # A missing explicit path must not accidentally submit a different matching file.
+    result = _dry_run_wrapper(repo, home, "./missing/meeting", cwd=tmp_path)
+
+    assert result.returncode == 2
+    assert "Input not found: ./missing/meeting" in result.stderr
+    assert "Would run:" not in result.stdout
+
+
+def test_wrapper_extensionless_missing_error_lists_attempted_candidates(tmp_path):
+    repo, input_dir, home = _isolated_wrapper_fixture(tmp_path)
+
+    result = _dry_run_wrapper(repo, home, "missing case")
+
+    assert result.returncode == 2
+    assert "missing case" in result.stderr
+    assert ".pdf" in result.stderr
+    assert ".rtf" in result.stderr
+    assert ".txt" in result.stderr
+    assert "input/" in result.stderr
+    assert "~/Downloads" in result.stderr
+
+
+def test_wrapper_missing_extensionless_item_in_batch_stops_before_cli_start(tmp_path):
+    repo, input_dir, home = _isolated_wrapper_fixture(tmp_path)
+    first = input_dir / "valid.pdf"
+    first.touch()
+
+    result = _dry_run_wrapper(repo, home, first, "missing case")
+
+    assert result.returncode == 2
+    assert "Input not found" in result.stderr
+    assert "Would run:" not in result.stdout
